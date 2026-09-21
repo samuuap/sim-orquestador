@@ -1,78 +1,84 @@
 /**
- * 3D Office Scene Component
- *
- * Renders the isometric office environment with agent avatars
+ * 3D Office Scene Component - Clean Modern Style
  */
 
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, Grid } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera, Environment } from '@react-three/drei';
 import { AgentAvatar } from './AgentAvatar';
 import { Office } from './Office';
 import { useAppStore } from '@/store';
 
 export function OfficeScene() {
-  const agents = useAppStore((state) => Object.values(state.agents));
+  const agents = useAppStore((state) => state.agents);
+  const agentList = Object.values(agents);
 
   return (
     <div className="w-full h-full">
       <Canvas
         shadows
-        gl={{ antialias: true }}
+        gl={{
+          antialias: true,
+          alpha: false,
+        }}
         dpr={[1, 2]}
       >
-        {/* Camera - Isometric view */}
+        {/* Camera - Isometric-style view */}
         <PerspectiveCamera
           makeDefault
-          position={[10, 10, 10]}
+          position={[12, 12, 12]}
           fov={50}
         />
 
-        {/* Lighting */}
-        <ambientLight intensity={0.5} />
+        {/* Lighting setup - clean and bright */}
+        <ambientLight intensity={0.6} />
+
         <directionalLight
-          position={[10, 10, 5]}
-          intensity={1}
+          position={[10, 15, 5]}
+          intensity={1.2}
           castShadow
           shadow-mapSize={[2048, 2048]}
+          shadow-camera-far={50}
+          shadow-camera-left={-15}
+          shadow-camera-right={15}
+          shadow-camera-top={15}
+          shadow-camera-bottom={-15}
         />
+
         <directionalLight
-          position={[-5, 5, -5]}
-          intensity={0.3}
+          position={[-5, 8, -5]}
+          intensity={0.4}
+          color="#a855f7"
         />
+
+        <pointLight
+          position={[0, 5, 0]}
+          intensity={0.3}
+          color="#3b82f6"
+        />
+
+        {/* Environment for subtle reflections */}
+        <Environment preset="city" />
 
         {/* Office environment */}
         <Office />
 
-        {/* Grid */}
-        <Grid
-          args={[20, 20]}
-          cellSize={1}
-          cellThickness={0.5}
-          cellColor="#6b7280"
-          sectionSize={5}
-          sectionThickness={1}
-          sectionColor="#374151"
-          fadeDistance={30}
-          fadeStrength={1}
-          position={[0, 0.01, 0]}
-        />
-
         {/* Agent avatars */}
-        {agents.map((agent) => (
+        {agentList.map((agent) => (
           <AgentAvatar
             key={agent.agent_id}
             agent={agent}
           />
         ))}
 
-        {/* Controls */}
+        {/* Camera controls */}
         <OrbitControls
           enablePan={true}
           enableZoom={true}
           enableRotate={true}
-          minDistance={5}
-          maxDistance={30}
-          maxPolarAngle={Math.PI / 2.2}
+          minDistance={8}
+          maxDistance={25}
+          maxPolarAngle={Math.PI / 2.1}
+          target={[0, 0, 0]}
         />
       </Canvas>
     </div>

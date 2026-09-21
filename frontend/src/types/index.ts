@@ -17,6 +17,10 @@ export interface Agent {
   current_task?: string;
   position: [number, number, number]; // 3D position
   rotation: number; // Y-axis rotation
+  tasks_completed?: number;
+  total_tokens_used?: number;
+  total_cost?: number;
+  avg_response_time?: number;
 }
 
 export interface Task {
@@ -48,6 +52,8 @@ export interface AgentMetrics {
 
 export interface ConnectionInfo {
   connected: boolean;
+  error?: string | null;
+  reconnectAttempts?: number;
   client_id?: string;
   connected_at?: string;
   last_heartbeat?: string;
@@ -71,7 +77,7 @@ export type WSEventType =
 // Store state
 export interface AppState {
   // Connection
-  connection: ConnectionInfo;
+  connectionInfo: ConnectionInfo;
 
   // Agents
   agents: Record<string, Agent>;

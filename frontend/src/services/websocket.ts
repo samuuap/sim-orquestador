@@ -132,3 +132,4 @@ class WebSocketService {
 }
 
 export const wsService = new WebSocketService();
+export const websocketService = wsService; // Alias for compatibility

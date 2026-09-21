@@ -11,11 +11,11 @@ export function MetricsPanel() {
   const agents = useAppStore((state) => state.agents);
 
   // Calculate aggregate metrics
-  const totalTasks = Object.values(agents).reduce((sum, agent) => sum + agent.tasks_completed, 0);
-  const totalTokens = Object.values(agents).reduce((sum, agent) => sum + agent.total_tokens_used, 0);
-  const totalCost = Object.values(agents).reduce((sum, agent) => sum + agent.total_cost, 0);
+  const totalTasks = Object.values(agents).reduce((sum, agent) => sum + (agent.tasks_completed || 0), 0);
+  const totalTokens = Object.values(agents).reduce((sum, agent) => sum + (agent.total_tokens_used || 0), 0);
+  const totalCost = Object.values(agents).reduce((sum, agent) => sum + (agent.total_cost || 0), 0);
   const avgResponseTime =
-    Object.values(agents).reduce((sum, agent) => sum + agent.avg_response_time, 0) / Object.keys(agents).length || 0;
+    Object.values(agents).reduce((sum, agent) => sum + (agent.avg_response_time || 0), 0) / Object.keys(agents).length || 0;
 
   const activeAgents = Object.values(agents).filter(
     (agent) => agent.state === 'THINKING' || agent.state === 'WORKING'
@@ -101,15 +101,15 @@ export function MetricsPanel() {
               <div className="grid grid-cols-3 gap-2 text-xs text-gray-400">
                 <div>
                   <div className="text-gray-500">Tasks</div>
-                  <div className="text-white font-medium">{agent.tasks_completed}</div>
+                  <div className="text-white font-medium">{agent.tasks_completed || 0}</div>
                 </div>
                 <div>
                   <div className="text-gray-500">Tokens</div>
-                  <div className="text-white font-medium">{agent.total_tokens_used.toLocaleString()}</div>
+                  <div className="text-white font-medium">{(agent.total_tokens_used || 0).toLocaleString()}</div>
                 </div>
                 <div>
                   <div className="text-gray-500">Cost</div>
-                  <div className="text-white font-medium">${agent.total_cost.toFixed(4)}</div>
+                  <div className="text-white font-medium">${(agent.total_cost || 0).toFixed(4)}</div>
                 </div>
               </div>
               {agent.current_task && (
@@ -118,7 +118,7 @@ export function MetricsPanel() {
                 </div>
               )}
               <div className="mt-1 text-xs text-gray-500">
-                Avg: {agent.avg_response_time.toFixed(2)}s
+                Avg: {(agent.avg_response_time || 0).toFixed(2)}s
               </div>
             </div>
           ))}

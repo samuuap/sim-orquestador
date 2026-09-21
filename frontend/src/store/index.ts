@@ -7,7 +7,7 @@ import type { Agent, Task, WSEvent, ConnectionInfo, AppState } from '@/types';
 
 interface AppStore extends AppState {
   // Actions
-  setConnection: (connection: ConnectionInfo) => void;
+  setConnection: (connected: boolean, error?: string, reconnectAttempts?: number) => void;
   updateAgent: (agent: Agent) => void;
   addTask: (task: Task) => void;
   updateTask: (taskId: string, updates: Partial<Task>) => void;
@@ -21,7 +21,11 @@ interface AppStore extends AppState {
 }
 
 const initialState: AppState = {
-  connection: { connected: false },
+  connectionInfo: {
+    connected: false,
+    error: null,
+    reconnectAttempts: 0
+  },
   agents: {
     ceo_001: {
       agent_id: 'ceo_001',
@@ -29,6 +33,10 @@ const initialState: AppState = {
       state: 'IDLE',
       position: [0, 0, 0],
       rotation: 0,
+      tasks_completed: 0,
+      total_tokens_used: 0,
+      total_cost: 0,
+      avg_response_time: 0,
     },
     designer_001: {
       agent_id: 'designer_001',
@@ -36,6 +44,10 @@ const initialState: AppState = {
       state: 'IDLE',
       position: [-4, 0, -2],
       rotation: Math.PI / 4,
+      tasks_completed: 0,
+      total_tokens_used: 0,
+      total_cost: 0,
+      avg_response_time: 0,
     },
     developer_001: {
       agent_id: 'developer_001',
@@ -43,6 +55,10 @@ const initialState: AppState = {
       state: 'IDLE',
       position: [4, 0, -2],
       rotation: -Math.PI / 4,
+      tasks_completed: 0,
+      total_tokens_used: 0,
+      total_cost: 0,
+      avg_response_time: 0,
     },
   },
   tasks: [],
@@ -56,8 +72,15 @@ const initialState: AppState = {
 export const useAppStore = create<AppStore>((set) => ({
   ...initialState,
 
-  setConnection: (connection) =>
-    set({ connection }),
+  setConnection: (connected, error, reconnectAttempts = 0) =>
+    set((state) => ({
+      connectionInfo: {
+        ...state.connectionInfo,
+        connected,
+        error: error || null,
+        reconnectAttempts,
+      },
+    })),
 
   updateAgent: (agent) =>
     set((state) => ({

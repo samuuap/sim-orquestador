@@ -41,8 +41,8 @@ function formatTimestamp(timestamp: string): string {
 }
 
 function EventItem({ event }: { event: WSEvent }) {
-  const icon = eventIcons[event.type] || <Info size={16} className="text-gray-400" />;
-  const color = eventColors[event.type] || 'text-gray-400';
+  const icon = eventIcons[event.event_type] || <Info size={16} className="text-gray-400" />;
+  const color = eventColors[event.event_type] || 'text-gray-400';
 
   return (
     <div className="flex gap-3 p-2 hover:bg-gray-800/30 rounded transition-colors">
@@ -50,37 +50,37 @@ function EventItem({ event }: { event: WSEvent }) {
       <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between gap-2 mb-1">
           <span className={`text-sm font-medium ${color}`}>
-            {event.type.replace(/_/g, ' ')}
+            {event.event_type?.replace(/_/g, ' ') || 'UNKNOWN'}
           </span>
           <span className="text-xs text-gray-500 flex-shrink-0">
             {formatTimestamp(event.timestamp)}
           </span>
         </div>
-        {event.data.message && (
-          <p className="text-sm text-gray-300 break-words">{event.data.message}</p>
+        {event.payload?.message && (
+          <p className="text-sm text-gray-300 break-words">{event.payload.message}</p>
         )}
-        {event.data.agent_id && (
-          <span className="text-xs text-gray-500">Agent: {event.data.agent_id}</span>
+        {event.agent_id && (
+          <span className="text-xs text-gray-500">Agent: {event.agent_id}</span>
         )}
-        {event.data.task_id && (
-          <span className="text-xs text-gray-500 ml-2">Task: {event.data.task_id}</span>
+        {event.payload?.task_id && (
+          <span className="text-xs text-gray-500 ml-2">Task: {event.payload.task_id}</span>
         )}
-        {event.data.error && (
-          <p className="text-sm text-red-400 mt-1 break-words">{event.data.error}</p>
+        {event.payload?.error && (
+          <p className="text-sm text-red-400 mt-1 break-words">{event.payload.error}</p>
         )}
-        {event.data.duration && (
+        {event.payload?.duration && (
           <span className="text-xs text-gray-500 ml-2">
-            Duration: {event.data.duration.toFixed(2)}s
+            Duration: {event.payload.duration.toFixed(2)}s
           </span>
         )}
-        {event.data.tokens && (
+        {event.payload?.tokens && (
           <span className="text-xs text-gray-500 ml-2">
-            Tokens: {event.data.tokens.toLocaleString()}
+            Tokens: {event.payload.tokens.toLocaleString()}
           </span>
         )}
-        {event.data.cost && (
+        {event.payload?.cost && (
           <span className="text-xs text-gray-500 ml-2">
-            Cost: ${event.data.cost.toFixed(4)}
+            Cost: ${event.payload.cost.toFixed(4)}
           </span>
         )}
       </div>

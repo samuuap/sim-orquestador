@@ -86,10 +86,4 @@ Thumbs.db
 .claude/
 
 # Documentation artifacts - keep only essential docs
-MILESTONE-*.md
-CEO-REFACTORING-COMPLETED.md
-FINAL-CHECKLIST.md
-FRONTEND-COMPLETE.md
-PROJECT-COMPLETE.md
-EXECUTIVE-SUMMARY.md
-READY-FOR-COMMIT.md
+

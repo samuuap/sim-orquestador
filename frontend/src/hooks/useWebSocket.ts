@@ -2,50 +2,18 @@
  * React hook for WebSocket connection and event handling
  */
 
-import { useEffect } from 'react';
+import { useEffect, useCallback } from 'react';
 import { useAppStore } from '@/store';
 import { wsService } from '@/services/websocket';
-import type { WSEvent, Agent } from '@/types';
+import type { WSEvent } from '@/types';
 
 export function useWebSocket() {
-  const {
-    setConnection,
-    updateAgent,
-    addEvent,
-    agents,
-  } = useAppStore();
+  const setConnection = useAppStore((state) => state.setConnection);
+  const updateAgent = useAppStore((state) => state.updateAgent);
+  const addEvent = useAppStore((state) => state.addEvent);
+  const agents = useAppStore((state) => state.agents);
 
-  useEffect(() => {
-    // Connect to WebSocket
-    wsService.connect();
-
-    // Handle connection status
-    const unsubConnection = wsService.onConnection((connected) => {
-      setConnection({
-        connected,
-        connected_at: connected ? new Date().toISOString() : undefined,
-        last_heartbeat: connected ? new Date().toISOString() : undefined,
-      });
-    });
-
-    // Handle events
-    const unsubEvent = wsService.onEvent((event: WSEvent) => {
-      // Add to event log
-      addEvent(event);
-
-      // Handle specific event types
-      handleEvent(event);
-    });
-
-    // Cleanup
-    return () => {
-      unsubConnection();
-      unsubEvent();
-      wsService.disconnect();
-    };
-  }, []);
-
-  const handleEvent = (event: WSEvent) => {
+  const handleEvent = useCallback((event: WSEvent) => {
     const { event_type, agent_id, payload } = event;
 
     if (!agent_id) return;
@@ -103,16 +71,40 @@ export function useWebSocket() {
         break;
 
       case 'HEARTBEAT':
-        // Update last heartbeat
-        setConnection({
-          connected: true,
-          last_heartbeat: new Date().toISOString(),
-        });
+        // Heartbeat received - connection is healthy
         break;
     }
-  };
+  }, [agents, updateAgent]);
+
+  useEffect(() => {
+    // Connect to WebSocket
+    wsService.connect();
+
+    // Handle connection status
+    const unsubConnection = wsService.onConnection((connected) => {
+      setConnection(connected, null, 0);
+    });
+
+    // Handle events
+    const unsubEvent = wsService.onEvent((event: WSEvent) => {
+      // Add to event log
+      addEvent(event);
+
+      // Handle specific event types
+      handleEvent(event);
+    });
+
+    // Cleanup
+    return () => {
+      unsubConnection();
+      unsubEvent();
+      wsService.disconnect();
+    };
+  }, [setConnection, addEvent, handleEvent]);
 
   return {
+    connect: () => wsService.connect(),
+    disconnect: () => wsService.disconnect(),
     isConnected: wsService.isConnected(),
   };
 }
