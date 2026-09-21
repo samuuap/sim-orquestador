@@ -53,6 +53,18 @@ class Message(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class TaskResult(BaseModel):
+    """Result of a completed task."""
+    task_id: str
+    agent_id: str
+    success: bool
+    output: str = Field(description="Task output or result description")
+    error: Optional[str] = Field(None, description="Error message if task failed")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional result metadata")
+    duration: float = Field(default=0.0, description="Task execution time in seconds")
+    completed_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class ConnectionInfo(BaseModel):
     """WebSocket connection information."""
     client_id: str

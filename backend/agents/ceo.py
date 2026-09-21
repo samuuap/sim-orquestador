@@ -1,49 +1,30 @@
-"""CEO Agent - Project evaluation, planning, and task delegation."""
-import uuid
+"""
+CEO Agent - Project evaluation, planning, and task delegation.
+Refactored to use Pydantic schemas for structured JSON output.
+"""
+
 import json
-import re
-from typing import Dict, Any, List, Optional
-from datetime import datetime
+import uuid
+import asyncio
 from pathlib import Path
+from typing import Optional
+from datetime import datetime
 
 import structlog
 
-from agents.base import BaseAgent, TaskResult, AgentState
-from agents.llm_provider import llm_provider
-from schemas import Task, Message
+from agents.base import BaseAgent, AgentState
+from agents.llm_provider import LLMProvider
+from agents.ceo_schemas import (
+    CEOOutput,
+    ProposalEvaluation,
+    Requirement,
+    DesignTask as CEODesignTask,
+    DevelopmentTask as CEODevelopmentTask,
+    Risk
+)
+from schemas import Task, TaskResult
 
-
-logger = structlog.get_logger()
-
-
-class ProjectProposal(dict):
-    """Structured project proposal data."""
-
-    def __init__(
-        self,
-        title: str,
-        description: str,
-        feasibility: str,
-        complexity: str,
-        estimated_timeline: str,
-        requirements: List[str],
-        design_tasks: List[Dict[str, str]],
-        development_tasks: List[Dict[str, str]],
-        risks: List[str],
-        next_steps: List[str]
-    ):
-        super().__init__(
-            title=title,
-            description=description,
-            feasibility=feasibility,
-            complexity=complexity,
-            estimated_timeline=estimated_timeline,
-            requirements=requirements,
-            design_tasks=design_tasks,
-            development_tasks=development_tasks,
-            risks=risks,
-            next_steps=next_steps
-        )
+logger = structlog.get_logger(__name__)
 
 
 class CEOAgent(BaseAgent):
@@ -56,34 +37,46 @@ class CEOAgent(BaseAgent):
     - Break down projects into concrete tasks
     - Delegate tasks to Designer and Developer agents
     - Track overall project progress
+
+    Uses structured JSON output with Pydantic validation for robust parsing.
     """
 
-    def __init__(self, websocket_manager=None):
-        """Initialize CEO agent."""
-        super().__init__(
-            agent_id="ceo_001",
-            role="ceo",
-            websocket_manager=websocket_manager
-        )
-
-        # Load system prompt
-        prompt_path = Path(__file__).parent.parent.parent / "prompts" / "ceo_system_prompt.md"
-        with open(prompt_path, "r", encoding="utf-8") as f:
-            self.system_prompt = f.read()
+    def __init__(
+        self,
+        agent_id: str = "ceo_001",
+        llm_provider: Optional[LLMProvider] = None,
+        websocket_manager=None
+    ):
+        super().__init__(agent_id=agent_id, role="ceo", websocket_manager=websocket_manager)
+        self.llm_provider = llm_provider
+        self.system_prompt = self._load_system_prompt()
+        self.logger = logger.bind(agent_id=agent_id, role="ceo")
 
         # CEO-specific state
-        self.current_proposal: Optional[ProjectProposal] = None
-        self.delegated_tasks: List[Task] = []
+        self.current_proposal: Optional[CEOOutput] = None
+        self.delegated_tasks: list[Task] = []
 
-        self.logger.info("ceo_agent_initialized", system_prompt_length=len(self.system_prompt))
+    def _load_system_prompt(self) -> str:
+        """Load the CEO system prompt from file."""
+        prompt_path = Path(__file__).parent.parent.parent / "prompts" / "ceo_system_prompt.md"
+        try:
+            with open(prompt_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except FileNotFoundError:
+            self.logger.error("ceo_system_prompt_not_found", path=str(prompt_path))
+            return "You are a CEO agent. Respond with valid JSON following the CEOOutput schema."
 
     async def process_task(self, task: Task) -> TaskResult:
         """
         Process a task assigned to the CEO.
 
-        The CEO primarily handles 'evaluation' and 'planning' tasks.
+        Args:
+            task: Task object with proposal or planning request
+
+        Returns:
+            TaskResult with parsed CEOOutput or error details
         """
-        self.logger.info("ceo_processing_task", task_type=task.task_type, description=task.description)
+        self.logger.info("ceo_processing_task", task_id=task.task_id, task_type=task.task_type)
 
         try:
             if task.task_type == "evaluation":
@@ -93,140 +86,194 @@ class CEOAgent(BaseAgent):
             else:
                 return TaskResult(
                     task_id=task.task_id,
+                    agent_id=self.agent_id,
                     success=False,
-                    output="",
-                    duration=0.0,
-                    error=f"Unsupported task type for CEO: {task.task_type}"
+                    output=f"Unsupported task type for CEO: {task.task_type}",
+                    error=f"CEO only handles 'evaluation' and 'planning' tasks"
                 )
 
         except Exception as e:
-            self.logger.error("ceo_task_error", task_id=task.task_id, error=str(e))
+            self.logger.error("ceo_task_failed", task_id=task.task_id, error=str(e))
+
+            await self._broadcast_event("CEO_ERROR", {
+                "task_id": task.task_id,
+                "error": str(e)
+            })
+
             return TaskResult(
                 task_id=task.task_id,
+                agent_id=self.agent_id,
                 success=False,
-                output="",
-                duration=0.0,
+                output=f"CEO task failed: {str(e)}",
                 error=str(e)
             )
 
     async def _evaluate_proposal(self, task: Task) -> TaskResult:
         """
-        Evaluate a project proposal from the user.
+        Evaluate a project proposal using LLM with structured JSON output.
 
-        Uses LLM to analyze feasibility, complexity, and provide structured breakdown.
+        Args:
+            task: Task with proposal description
+
+        Returns:
+            TaskResult with CEOOutput
         """
         self.logger.info("ceo_evaluating_proposal", proposal=task.description[:100])
 
-        # Change state to THINKING
-        await self._change_state(
-            AgentState.THINKING,
-            {"phase": "evaluation", "proposal": task.description[:50]}
+        # Broadcast start event
+        await self._broadcast_event("CEO_EVALUATING", {
+            "task_id": task.task_id,
+            "proposal": task.description[:200]
+        })
+
+        # Generate structured CEO output
+        ceo_output = await self._analyze_proposal(task.description)
+        self.current_proposal = ceo_output
+
+        # Broadcast completion
+        await self._broadcast_event("CEO_EVALUATION_COMPLETE", {
+            "task_id": task.task_id,
+            "project_title": ceo_output.project_title,
+            "feasibility": ceo_output.evaluation.feasibility,
+            "complexity": ceo_output.evaluation.complexity,
+            "estimated_timeline": ceo_output.evaluation.estimated_timeline,
+            "design_task_count": len(ceo_output.design_tasks),
+            "dev_task_count": len(ceo_output.development_tasks)
+        })
+
+        # Format output for display
+        formatted_output = self._format_ceo_output(ceo_output)
+
+        # Update metrics
+        self.metrics.total_tokens += getattr(ceo_output, '_token_count', 0)
+        self.metrics.total_cost += getattr(ceo_output, '_cost', 0.0)
+
+        return TaskResult(
+            task_id=task.task_id,
+            agent_id=self.agent_id,
+            success=True,
+            output=formatted_output,
+            metadata={
+                "project_title": ceo_output.project_title,
+                "feasibility": ceo_output.evaluation.feasibility,
+                "complexity": ceo_output.evaluation.complexity,
+                "estimated_timeline": ceo_output.evaluation.estimated_timeline,
+                "requirement_count": len(ceo_output.requirements),
+                "design_task_count": len(ceo_output.design_tasks),
+                "dev_task_count": len(ceo_output.development_tasks),
+                "risk_count": len(ceo_output.risks),
+                "raw_output": ceo_output.model_dump()
+            }
         )
 
-        # Broadcast evaluation start
-        if self.websocket_manager:
-            from schemas import WSEvent
-            event = WSEvent(
-                event_type="CEO_EVALUATING",
-                agent_id=self.agent_id,
-                timestamp=datetime.utcnow(),
-                payload={
-                    "proposal": task.description,
-                    "status": "analyzing"
-                }
-            )
-            await self.websocket_manager.broadcast(event)
+    async def _analyze_proposal(self, proposal_text: str) -> CEOOutput:
+        """
+        Analyze project proposal using LLM with structured JSON output.
 
-        # Prepare prompt for LLM
-        user_prompt = f"""Evaluate the following project proposal and provide a structured analysis:
+        Args:
+            proposal_text: User's project proposal
 
-**Proposal**: {task.description}
+        Returns:
+            Validated CEOOutput object
 
-Please provide your evaluation in the standard format defined in your system prompt.
-"""
+        Raises:
+            ValueError: If LLM response is invalid JSON or doesn't match schema
+        """
+        if not self.llm_provider:
+            raise ValueError("LLM provider not configured")
 
-        # Call LLM
-        await self._change_state(AgentState.WORKING, {"phase": "llm_call"})
+        self.logger.info("calling_llm_for_proposal_analysis")
 
+        # Construct user prompt
+        user_prompt = f"""Analyze this project proposal and provide a comprehensive evaluation:
+
+Proposal: {proposal_text}
+
+Respond with valid JSON following the CEOOutput schema. Include:
+1. Project title (concise, descriptive)
+2. Evaluation (feasibility, complexity, timeline, confidence)
+3. Requirements (with IDs, descriptions, priorities, categories)
+4. Design tasks (with task IDs, titles, descriptions, estimated hours, priorities, dependencies)
+5. Development tasks (with task IDs, titles, descriptions, estimated hours, priorities, dependencies, tech stack)
+6. Risks (with IDs, descriptions, severity, mitigation strategies)
+7. Next steps (ordered list of immediate actions)
+8. Notes (any additional clarifications)
+
+Use these formats:
+- Task IDs: "design_001", "design_002" for design tasks; "dev_001", "dev_002" for development tasks
+- Requirement IDs: "req_001", "req_002", etc.
+- Risk IDs: "risk_001", "risk_002", etc.
+
+Respond ONLY with valid JSON, no additional text."""
+
+        # Call LLM with retry logic
+        response = await self.llm_provider.generate_with_retry(
+            prompt=user_prompt,
+            system_prompt=self.system_prompt,
+            max_tokens=3000,
+            temperature=0.7
+        )
+
+        response_text = response["content"]
+        tokens = response["tokens"]
+        cost = response["cost"]
+        duration = response["duration"]
+
+        self.logger.info(
+            "llm_response_received",
+            tokens=tokens,
+            cost=cost,
+            duration=duration
+        )
+
+        # Parse and validate JSON response
         try:
-            response = await llm_provider.generate_with_retry(
-                prompt=user_prompt,
-                system_prompt=self.system_prompt,
-                temperature=0.7,
-                max_tokens=2000,
-                timeout=60.0
-            )
+            response_json = json.loads(response_text)
+            ceo_output = CEOOutput.model_validate(response_json)
 
-            evaluation_text = response["content"]
-
-            # Update metrics
-            self.metrics.total_tokens += response["tokens"]
-            self.metrics.total_cost += response["cost"]
-
-            # Parse the evaluation into structured data
-            proposal = self._parse_evaluation(task.description, evaluation_text)
-            self.current_proposal = proposal
-
-            # Store in task artifacts
-            artifacts = {
-                "proposal": proposal,
-                "raw_evaluation": evaluation_text,
-                "tokens_used": response["tokens"],
-                "cost": response["cost"]
-            }
-
-            # Broadcast evaluation complete
-            if self.websocket_manager:
-                event = WSEvent(
-                    event_type="CEO_EVALUATION_COMPLETE",
-                    agent_id=self.agent_id,
-                    timestamp=datetime.utcnow(),
-                    payload={
-                        "proposal": proposal,
-                        "evaluation": evaluation_text[:500]  # Truncated for event
-                    }
-                )
-                await self.websocket_manager.broadcast(event)
+            # Attach metrics for later use
+            ceo_output._token_count = tokens
+            ceo_output._cost = cost
 
             self.logger.info(
-                "ceo_evaluation_complete",
-                feasibility=proposal.get("feasibility"),
-                complexity=proposal.get("complexity"),
-                timeline=proposal.get("estimated_timeline")
+                "ceo_output_validated",
+                project_title=ceo_output.project_title,
+                feasibility=ceo_output.evaluation.feasibility,
+                task_count=len(ceo_output.design_tasks) + len(ceo_output.development_tasks)
             )
 
-            return TaskResult(
-                task_id=task.task_id,
-                success=True,
-                output=evaluation_text,
-                duration=response.get("duration", 0.0),
-                artifacts=artifacts
-            )
+            return ceo_output
+
+        except json.JSONDecodeError as e:
+            self.logger.error("invalid_json_response", error=str(e), response=response_text[:200])
+            raise ValueError(f"LLM returned invalid JSON: {str(e)}")
 
         except Exception as e:
-            self.logger.error("ceo_evaluation_failed", error=str(e))
-            raise
+            self.logger.error("schema_validation_failed", error=str(e))
+            raise ValueError(f"Response doesn't match CEOOutput schema: {str(e)}")
 
     async def _create_project_plan(self, task: Task) -> TaskResult:
         """
         Create a detailed project plan with task delegation.
 
-        Generates specific tasks for Designer and Developer agents.
+        Args:
+            task: Planning task
+
+        Returns:
+            TaskResult with task breakdown
         """
         self.logger.info("ceo_creating_plan")
-
-        await self._change_state(AgentState.THINKING, {"phase": "planning"})
 
         if not self.current_proposal:
             return TaskResult(
                 task_id=task.task_id,
+                agent_id=self.agent_id,
                 success=False,
-                output="",
-                duration=0.0,
-                error="No proposal available for planning. Run evaluation first."
+                output="No proposal available for planning. Run evaluation first.",
+                error="Missing proposal data"
             )
 
-        # Generate task assignments
+        # Generate Task objects from CEO output
         design_tasks = self._generate_design_tasks()
         dev_tasks = self._generate_dev_tasks()
 
@@ -234,148 +281,56 @@ Please provide your evaluation in the standard format defined in your system pro
         self.delegated_tasks = all_tasks
 
         # Broadcast plan created
-        if self.websocket_manager:
-            from schemas import WSEvent
-            event = WSEvent(
-                event_type="CEO_PLAN_CREATED",
-                agent_id=self.agent_id,
-                timestamp=datetime.utcnow(),
-                payload={
-                    "total_tasks": len(all_tasks),
-                    "design_tasks": len(design_tasks),
-                    "dev_tasks": len(dev_tasks),
-                    "tasks": [t.model_dump() for t in all_tasks]
+        await self._broadcast_event("CEO_PLAN_CREATED", {
+            "task_id": task.task_id,
+            "total_tasks": len(all_tasks),
+            "design_tasks": len(design_tasks),
+            "dev_tasks": len(dev_tasks),
+            "tasks": [
+                {
+                    "task_id": t.task_id,
+                    "description": t.description,
+                    "task_type": t.task_type,
+                    "assigned_to": t.assigned_to
                 }
-            )
-            await self.websocket_manager.broadcast(event)
+                for t in all_tasks
+            ]
+        })
 
-        plan_summary = f"""
-# Project Plan: {self.current_proposal.get('title', 'Unnamed Project')}
-
-## Tasks Created
-- **Design Tasks**: {len(design_tasks)}
-- **Development Tasks**: {len(dev_tasks)}
-- **Total Tasks**: {len(all_tasks)}
-
-## Task List
-{self._format_task_list(all_tasks)}
-
-## Next Steps
-Ready to delegate tasks to team members.
-"""
+        plan_summary = self._format_plan_summary(design_tasks, dev_tasks)
 
         return TaskResult(
             task_id=task.task_id,
+            agent_id=self.agent_id,
             success=True,
             output=plan_summary,
-            duration=0.0,
-            artifacts={
-                "tasks": [t.model_dump() for t in all_tasks],
+            metadata={
+                "tasks": [
+                    {
+                        "task_id": t.task_id,
+                        "description": t.description,
+                        "task_type": t.task_type
+                    }
+                    for t in all_tasks
+                ],
                 "design_count": len(design_tasks),
                 "dev_count": len(dev_tasks)
             }
         )
 
-    def _parse_evaluation(self, original_proposal: str, evaluation_text: str) -> ProjectProposal:
-        """
-        Parse LLM evaluation response into structured data.
-
-        Extracts key information using regex and text parsing.
-        """
-        # Extract title (first heading or use proposal start)
-        title_match = re.search(r'##\s*Proposal Evaluation:\s*(.+)', evaluation_text)
-        title = title_match.group(1).strip() if title_match else original_proposal[:50]
-
-        # Extract feasibility
-        feasibility_match = re.search(r'\*\*Feasibility\*\*:\s*(.+)', evaluation_text, re.IGNORECASE)
-        feasibility = feasibility_match.group(1).strip() if feasibility_match else "NEEDS CLARIFICATION"
-
-        # Extract complexity
-        complexity_match = re.search(r'\*\*Complexity\*\*:\s*(.+)', evaluation_text, re.IGNORECASE)
-        complexity = complexity_match.group(1).strip() if complexity_match else "MEDIUM"
-
-        # Extract timeline
-        timeline_match = re.search(r'\*\*Estimated Timeline\*\*:\s*(.+)', evaluation_text, re.IGNORECASE)
-        estimated_timeline = timeline_match.group(1).strip() if timeline_match else "Unknown"
-
-        # Extract requirements
-        requirements = self._extract_list_items(evaluation_text, r'\*\*Key Requirements\*\*:')
-
-        # Extract risks
-        risks = self._extract_list_items(evaluation_text, r'\*\*Dependencies & Risks\*\*:')
-
-        # Extract next steps
-        next_steps = self._extract_list_items(evaluation_text, r'\*\*Next Steps\*\*:')
-
-        # Extract design and dev tasks (simplified - parse from sections)
-        design_tasks = self._extract_tasks_from_section(evaluation_text, "Design Phase")
-        development_tasks = self._extract_tasks_from_section(evaluation_text, "Development Phase")
-
-        return ProjectProposal(
-            title=title,
-            description=original_proposal,
-            feasibility=feasibility,
-            complexity=complexity,
-            estimated_timeline=estimated_timeline,
-            requirements=requirements,
-            design_tasks=design_tasks,
-            development_tasks=development_tasks,
-            risks=risks,
-            next_steps=next_steps
-        )
-
-    def _extract_list_items(self, text: str, section_header: str) -> List[str]:
-        """Extract list items from a section."""
-        items = []
-
-        # Find section
-        pattern = f"{section_header}(.+?)(?=\\*\\*|###|##|$)"
-        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-
-        if match:
-            section_text = match.group(1)
-            # Extract list items (lines starting with - or numbers)
-            item_matches = re.findall(r'^\s*[-•]\s*(.+)$', section_text, re.MULTILINE)
-            items.extend([item.strip() for item in item_matches])
-
-        return items
-
-    def _extract_tasks_from_section(self, text: str, section_name: str) -> List[Dict[str, str]]:
-        """Extract tasks from Design or Development phase sections."""
-        tasks = []
-
-        # Find section
-        pattern = f"###\\s*{section_name}(.+?)(?=###|##|$)"
-        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-
-        if match:
-            section_text = match.group(1)
-            # Extract numbered tasks with time estimates
-            task_matches = re.findall(r'\d+\.\s*(.+?)\s*-\s*(.+?)(?:\n|$)', section_text)
-
-            for description, estimate in task_matches:
-                tasks.append({
-                    "description": description.strip(),
-                    "estimate": estimate.strip()
-                })
-
-        return tasks
-
-    def _generate_design_tasks(self) -> List[Task]:
+    def _generate_design_tasks(self) -> list[Task]:
         """Generate Task objects for designer from current proposal."""
         tasks = []
 
         if not self.current_proposal:
             return tasks
 
-        design_tasks_data = self.current_proposal.get("design_tasks", [])
-
-        for idx, task_data in enumerate(design_tasks_data):
+        for ceo_task in self.current_proposal.design_tasks:
             task = Task(
-                task_id=f"design_{uuid.uuid4().hex[:8]}",
-                description=task_data.get("description", "Design task"),
+                task_id=ceo_task.task_id,
+                description=f"{ceo_task.title}: {ceo_task.description}",
                 task_type="design",
-                priority=1,
+                priority={"high": 1, "medium": 2, "low": 3}.get(ceo_task.priority, 2),
                 assigned_to="designer_001",
                 status="queued",
                 created_at=datetime.utcnow()
@@ -384,21 +339,19 @@ Ready to delegate tasks to team members.
 
         return tasks
 
-    def _generate_dev_tasks(self) -> List[Task]:
+    def _generate_dev_tasks(self) -> list[Task]:
         """Generate Task objects for developer from current proposal."""
         tasks = []
 
         if not self.current_proposal:
             return tasks
 
-        dev_tasks_data = self.current_proposal.get("development_tasks", [])
-
-        for idx, task_data in enumerate(dev_tasks_data):
+        for ceo_task in self.current_proposal.development_tasks:
             task = Task(
-                task_id=f"dev_{uuid.uuid4().hex[:8]}",
-                description=task_data.get("description", "Development task"),
+                task_id=ceo_task.task_id,
+                description=f"{ceo_task.title}: {ceo_task.description}",
                 task_type="development",
-                priority=2,
+                priority={"high": 1, "medium": 2, "low": 3}.get(ceo_task.priority, 2),
                 assigned_to="developer_001",
                 status="queued",
                 created_at=datetime.utcnow()
@@ -407,60 +360,163 @@ Ready to delegate tasks to team members.
 
         return tasks
 
-    def _format_task_list(self, tasks: List[Task]) -> str:
-        """Format task list for output."""
-        output = []
+    def _format_ceo_output(self, output: CEOOutput) -> str:
+        """
+        Format CEOOutput into human-readable text.
 
-        # Group by type
-        design_tasks = [t for t in tasks if t.task_type == "design"]
-        dev_tasks = [t for t in tasks if t.task_type == "development"]
+        Args:
+            output: Validated CEOOutput object
+
+        Returns:
+            Formatted string for display
+        """
+        lines = []
+
+        # Header
+        lines.append("=" * 60)
+        lines.append("PROJECT EVALUATION")
+        lines.append("=" * 60)
+        lines.append("")
+
+        # Project Title
+        lines.append(f"Project: {output.project_title}")
+        lines.append("")
+
+        # Evaluation
+        eval = output.evaluation
+        lines.append(f"Feasibility: {eval.feasibility}")
+        lines.append(f"Complexity: {eval.complexity}")
+        lines.append(f"Timeline: {eval.estimated_timeline}")
+        lines.append(f"Confidence: {eval.confidence.upper()}")
+        lines.append("")
+
+        # Requirements
+        lines.append("-" * 60)
+        lines.append(f"REQUIREMENTS ({len(output.requirements)})")
+        lines.append("-" * 60)
+        for req in output.requirements:
+            lines.append(f"[{req.priority.upper()}] {req.id}: {req.description}")
+            lines.append(f"  Category: {req.category}")
+        lines.append("")
+
+        # Design Tasks
+        lines.append("-" * 60)
+        lines.append(f"DESIGN TASKS ({len(output.design_tasks)})")
+        lines.append("-" * 60)
+        for task in output.design_tasks:
+            lines.append(f"[{task.priority.upper()}] {task.task_id}: {task.title}")
+            lines.append(f"  {task.description}")
+            lines.append(f"  Estimated: {task.estimated_hours}h")
+            if task.dependencies:
+                lines.append(f"  Depends on: {', '.join(task.dependencies)}")
+        lines.append("")
+
+        # Development Tasks
+        lines.append("-" * 60)
+        lines.append(f"DEVELOPMENT TASKS ({len(output.development_tasks)})")
+        lines.append("-" * 60)
+        for task in output.development_tasks:
+            lines.append(f"[{task.priority.upper()}] {task.task_id}: {task.title}")
+            lines.append(f"  {task.description}")
+            lines.append(f"  Estimated: {task.estimated_hours}h")
+            if task.technical_stack:
+                lines.append(f"  Stack: {', '.join(task.technical_stack)}")
+            if task.dependencies:
+                lines.append(f"  Depends on: {', '.join(task.dependencies)}")
+        lines.append("")
+
+        # Risks
+        if output.risks:
+            lines.append("-" * 60)
+            lines.append(f"RISKS & DEPENDENCIES ({len(output.risks)})")
+            lines.append("-" * 60)
+            for risk in output.risks:
+                lines.append(f"[{risk.severity.upper()}] {risk.id}: {risk.description}")
+                if risk.mitigation:
+                    lines.append(f"  Mitigation: {risk.mitigation}")
+            lines.append("")
+
+        # Next Steps
+        lines.append("-" * 60)
+        lines.append("NEXT STEPS")
+        lines.append("-" * 60)
+        for i, step in enumerate(output.next_steps, 1):
+            lines.append(f"{i}. {step}")
+        lines.append("")
+
+        # Notes
+        if output.notes:
+            lines.append("-" * 60)
+            lines.append("NOTES")
+            lines.append("-" * 60)
+            lines.append(output.notes)
+            lines.append("")
+
+        lines.append("=" * 60)
+
+        return "\n".join(lines)
+
+    def _format_plan_summary(self, design_tasks: list[Task], dev_tasks: list[Task]) -> str:
+        """Format plan summary for display."""
+        lines = []
+
+        lines.append("=" * 60)
+        lines.append("PROJECT PLAN")
+        lines.append("=" * 60)
+        lines.append("")
+
+        if self.current_proposal:
+            lines.append(f"Project: {self.current_proposal.project_title}")
+            lines.append("")
+
+        lines.append(f"Total Tasks: {len(design_tasks) + len(dev_tasks)}")
+        lines.append(f"  Design Tasks: {len(design_tasks)}")
+        lines.append(f"  Development Tasks: {len(dev_tasks)}")
+        lines.append("")
 
         if design_tasks:
-            output.append("\n### Design Tasks")
+            lines.append("-" * 60)
+            lines.append("DESIGN TASKS")
+            lines.append("-" * 60)
             for i, task in enumerate(design_tasks, 1):
-                output.append(f"{i}. [{task.task_id}] {task.description}")
+                lines.append(f"{i}. [{task.task_id}] {task.description}")
+            lines.append("")
 
         if dev_tasks:
-            output.append("\n### Development Tasks")
+            lines.append("-" * 60)
+            lines.append("DEVELOPMENT TASKS")
+            lines.append("-" * 60)
             for i, task in enumerate(dev_tasks, 1):
-                output.append(f"{i}. [{task.task_id}] {task.description}")
+                lines.append(f"{i}. [{task.task_id}] {task.description}")
+            lines.append("")
 
-        return "\n".join(output)
+        lines.append("=" * 60)
+        lines.append("Ready to delegate tasks to team members")
+        lines.append("=" * 60)
 
-    async def delegate_task(self, task: Task, target_agent_id: str) -> Message:
-        """
-        Delegate a task to another agent.
+        return "\n".join(lines)
 
-        Creates a message to the target agent with task details.
-        """
-        message = Message(
-            message_id=f"msg_{uuid.uuid4().hex[:8]}",
-            sender=self.agent_id,
-            receiver=target_agent_id,
-            content=f"New task assigned: {task.description}",
-            timestamp=datetime.utcnow(),
-            metadata={
-                "task_id": task.task_id,
-                "task_type": task.task_type,
-                "priority": task.priority
-            }
-        )
+    async def _broadcast_event(self, event_type: str, payload: dict):
+        """Broadcast event via WebSocket if manager is available."""
+        if self.websocket_manager:
+            await self.websocket_manager.broadcast({
+                "event_type": event_type,
+                "agent_id": self.agent_id,
+                "payload": payload
+            })
 
-        await self.send_message(message)
-
-        self.logger.info(
-            "ceo_delegated_task",
-            task_id=task.task_id,
-            target_agent=target_agent_id
-        )
-
-        return message
-
-    async def evaluate_user_proposal(self, proposal_text: str) -> ProjectProposal:
+    async def evaluate_user_proposal(self, proposal_text: str) -> CEOOutput:
         """
         High-level method to evaluate a user's proposal.
 
-        This is a convenience method that can be called directly.
+        Args:
+            proposal_text: User's project proposal
+
+        Returns:
+            CEOOutput with complete evaluation
+
+        Raises:
+            Exception: If evaluation fails
         """
         task = Task(
             task_id=f"eval_{uuid.uuid4().hex[:8]}",
@@ -475,6 +531,6 @@ Ready to delegate tasks to team members.
         result = await self.assign_task(task)
 
         if result.success:
-            return result.artifacts.get("proposal")
+            return result.metadata.get("raw_output")
         else:
             raise Exception(f"Evaluation failed: {result.error}")
