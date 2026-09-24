@@ -10,7 +10,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# Anchored to the repository root. Unanchored, this also matched frontend/src/lib and silently
+# kept a source file out of the repository - the build still worked locally because the file was
+# on disk, and the failure only appeared on a fresh clone.
+/lib/
 lib64/
 parts/
 sdist/
