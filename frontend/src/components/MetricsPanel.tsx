@@ -22,7 +22,7 @@ export function MetricsPanel() {
   ).length;
 
   return (
-    <div className="absolute top-4 right-4 w-80 bg-gray-900/95 backdrop-blur-sm border border-gray-700 rounded-lg shadow-xl">
+    <div className="absolute top-20 right-8 w-96 max-h-[calc(100vh-7rem)] overflow-y-auto bg-slate-900/90 backdrop-blur-xl border border-slate-800/50 rounded-2xl shadow-2xl">
       <div className="p-4">
         <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
           <Activity size={20} className="text-blue-400" />

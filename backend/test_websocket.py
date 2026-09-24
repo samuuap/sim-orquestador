@@ -1,17 +1,37 @@
-"""Simple test script to verify WebSocket connectivity."""
+"""Smoke test verifying WebSocket connectivity against a running backend.
+
+Run it directly (``python test_websocket.py``) or via pytest. Under pytest it is
+skipped when nothing is listening on the WebSocket port, since it needs a live
+server rather than being a self-contained unit test.
+"""
 import asyncio
 import json
+import socket
+
+import pytest
 import websockets
+
+WS_HOST = "localhost"
+WS_PORT = 8000
+WS_URI = f"ws://{WS_HOST}:{WS_PORT}/ws/office"
+
+
+def _server_is_running() -> bool:
+    """Return True if something is accepting connections on the backend port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex((WS_HOST, WS_PORT)) == 0
 
 
 async def test_websocket():
     """Test WebSocket connection to the Office Agents Simulator."""
-    uri = "ws://localhost:8000/ws/office"
+    if not _server_is_running():
+        pytest.skip(f"No backend listening on {WS_HOST}:{WS_PORT}; start it with `uvicorn main:app`")
 
     print("Connecting to WebSocket server...")
 
     try:
-        async with websockets.connect(uri) as websocket:
+        async with websockets.connect(WS_URI) as websocket:
             # Receive welcome message
             welcome = await websocket.recv()
             welcome_data = json.loads(welcome)
@@ -34,10 +54,7 @@ async def test_websocket():
             print("\nWebSocket test completed successfully!")
 
     except Exception as e:
-        print(f"Error: {e}")
-        return False
-
-    return True
+        pytest.fail(f"WebSocket smoke test failed: {e}")
 
 
 if __name__ == "__main__":
@@ -45,12 +62,14 @@ if __name__ == "__main__":
     print("Office Agents Simulator - WebSocket Test")
     print("=" * 60)
     print("\nMake sure the backend server is running:")
-    print("  cd backend && source venv/Scripts/activate && python main.py")
+    print("  cd backend && source venv/bin/activate && uvicorn main:app --reload --port 8000")
     print("\n" + "=" * 60 + "\n")
 
-    success = asyncio.run(test_websocket())
+    if not _server_is_running():
+        raise SystemExit(f"No backend listening on {WS_HOST}:{WS_PORT}")
 
-    if success:
-        print("\n" + "=" * 60)
-        print("All tests passed!")
-        print("=" * 60)
+    asyncio.run(test_websocket())
+
+    print("\n" + "=" * 60)
+    print("All tests passed!")
+    print("=" * 60)

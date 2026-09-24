@@ -305,11 +305,3 @@ Respond ONLY with valid JSON, no additional text."""
 
         return "\n".join(lines)
 
-    async def _broadcast_event(self, event_type: str, payload: dict):
-        """Broadcast event via WebSocket if manager is available."""
-        if self.websocket_manager:
-            await self.websocket_manager.broadcast({
-                "event_type": event_type,
-                "agent_id": self.agent_id,
-                "payload": payload
-            })

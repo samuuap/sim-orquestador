@@ -2,9 +2,6 @@
  * Office Environment Component - Clean and Modern
  */
 
-import { useRef } from 'react';
-import * as THREE from 'three';
-
 export function Office() {
   return (
     <group>

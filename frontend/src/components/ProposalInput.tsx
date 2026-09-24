@@ -24,13 +24,7 @@ export function ProposalInput() {
     setIsSubmitting(true);
 
     try {
-      websocketService.send({
-        type: 'SUBMIT_PROPOSAL',
-        data: {
-          proposal: proposal.trim(),
-          timestamp: new Date().toISOString(),
-        },
-      });
+      websocketService.submitProposal(proposal.trim());
 
       setProposal('');
     } catch (error) {

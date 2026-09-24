@@ -3,10 +3,10 @@ import asyncio
 import uuid
 from datetime import datetime
 
-from agents.base import BaseAgent, AgentState, TaskResult
-from agents.llm_provider import llm_provider
+from agents.base import BaseAgent, AgentState
+from agents.llm_provider import get_llm_provider
 from agents.message_queue import message_queue
-from schemas import Task, Message
+from schemas import Task, Message, TaskResult
 
 
 class TestAgent(BaseAgent):
@@ -21,10 +21,11 @@ class TestAgent(BaseAgent):
 
         return TaskResult(
             task_id=task.task_id,
+            agent_id=self.agent_id,
             success=True,
             output=f"Completed task: {task.description}",
             duration=0.0,
-            artifacts={"test_data": "example"}
+            metadata={"test_data": "example"}
         )
 
 
@@ -118,14 +119,16 @@ async def test_llm_provider():
     print("Test 3: LLM Provider")
     print("=" * 60)
 
+    provider = get_llm_provider()
+
     print(f"LLM Provider initialized")
-    print(f"  Provider: {llm_provider.provider}")
-    print(f"  Model: {llm_provider.model}")
+    print(f"  Provider: {provider.provider}")
+    print(f"  Model: {provider.model}")
 
     print(f"\nSkipping actual LLM call (requires API key)")
     print(f"  To test LLM integration:")
     print(f"  1. Configure API key in .env")
-    print(f"  2. Use: await llm_provider.generate('test prompt')")
+    print(f"  2. Use: await get_llm_provider().generate('test prompt')")
 
 
 async def main():

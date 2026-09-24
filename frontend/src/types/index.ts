@@ -38,6 +38,9 @@ export interface WSEvent {
   event_type: string;
   agent_id?: string;
   timestamp: string;
+  // Event payloads are free-form JSON whose shape depends on event_type;
+  // consumers narrow the fields they need.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   payload: Record<string, any>;
 }
 
@@ -63,6 +66,16 @@ export interface ConnectionInfo {
 export type WSEventType =
   | 'CONNECTION_ESTABLISHED'
   | 'HEARTBEAT'
+  | 'PONG'
+  | 'SYSTEM_MESSAGE'
+  | 'AGENT_STATE_CHANGED'
+  | 'AGENT_MESSAGE'
+  | 'PROPOSAL_RECEIVED'
+  | 'ORCHESTRATION_STARTED'
+  | 'ORCHESTRATION_COMPLETE'
+  | 'ORCHESTRATION_FAILED'
+  | 'TASK_COMPLETED'
+  | 'TASK_FAILED'
   | 'CEO_EVALUATING'
   | 'CEO_EVALUATION_COMPLETE'
   | 'CEO_PLAN_CREATED'
@@ -73,6 +86,16 @@ export type WSEventType =
   | 'DEVELOPER_ANALYZING'
   | 'DEVELOPER_ANALYSIS_COMPLETE'
   | 'DEVELOPER_ERROR';
+
+/** Cumulative per-agent counters sent by the backend on TASK_COMPLETED. */
+export interface BackendAgentMetrics {
+  total_tasks: number;
+  completed_tasks: number;
+  failed_tasks: number;
+  total_tokens: number;
+  total_cost: number;
+  average_duration: number;
+}
 
 // Store state
 export interface AppState {
@@ -90,6 +113,9 @@ export interface AppState {
 
   // Current proposal
   currentProposal: string;
+
+  // True while the backend is orchestrating a proposal
+  isProcessing: boolean;
 
   // UI state
   selectedAgent?: string;

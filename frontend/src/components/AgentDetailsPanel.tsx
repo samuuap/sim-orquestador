@@ -27,14 +27,27 @@ const stateColors = {
   ERROR: 'text-red-400',
 };
 
-function AgentCard({ agent }: { agent: Agent }) {
+function AgentCard({ agent, isSelected, onSelect }: {
+  agent: Agent;
+  isSelected: boolean;
+  onSelect: () => void;
+}) {
   const Icon = agentIcons[agent.role];
   const gradient = agentColors[agent.role];
   const stateColor = stateColors[agent.state];
   const isActive = agent.state !== 'IDLE';
 
+  const borderClass = isSelected
+    ? 'border-blue-500/70 ring-1 ring-blue-500/40'
+    : isActive
+    ? 'border-slate-600'
+    : 'border-slate-700/50';
+
   return (
-    <div className={`relative bg-slate-800/50 backdrop-blur-sm border ${isActive ? 'border-slate-600' : 'border-slate-700/50'} rounded-xl p-4 transition-all hover:border-slate-600`}>
+    <div
+      onClick={onSelect}
+      className={`relative bg-slate-800/50 backdrop-blur-sm border ${borderClass} rounded-xl p-4 transition-all hover:border-slate-600 cursor-pointer`}
+    >
       {/* Active indicator */}
       {isActive && (
         <div className="absolute top-4 right-4 w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
@@ -59,6 +72,26 @@ function AgentCard({ agent }: { agent: Agent }) {
         </span>
       </div>
 
+      {/* Live counters */}
+      <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-slate-700/50">
+        <div>
+          <div className="text-slate-500 text-[10px] uppercase tracking-wide">Tasks</div>
+          <div className="text-slate-200 text-xs font-medium">{agent.tasks_completed ?? 0}</div>
+        </div>
+        <div>
+          <div className="text-slate-500 text-[10px] uppercase tracking-wide">Tokens</div>
+          <div className="text-slate-200 text-xs font-medium">
+            {(agent.total_tokens_used ?? 0).toLocaleString()}
+          </div>
+        </div>
+        <div>
+          <div className="text-slate-500 text-[10px] uppercase tracking-wide">Cost</div>
+          <div className="text-slate-200 text-xs font-medium">
+            ${(agent.total_cost ?? 0).toFixed(4)}
+          </div>
+        </div>
+      </div>
+
       {/* Current task */}
       {agent.current_task && (
         <div className="mt-3 pt-3 border-t border-slate-700/50">
@@ -77,6 +110,7 @@ function AgentCard({ agent }: { agent: Agent }) {
 export function AgentDetailsPanel() {
   const agents = useAppStore((state) => state.agents);
   const selectedAgent = useAppStore((state) => state.selectedAgent);
+  const selectAgent = useAppStore((state) => state.selectAgent);
   const events = useAppStore((state) => state.events);
 
   const agentList = Object.values(agents);
@@ -98,7 +132,14 @@ export function AgentDetailsPanel() {
       {/* Agents list */}
       <div className="p-4 space-y-3 overflow-y-auto flex-1">
         {agentList.map((agent) => (
-          <AgentCard key={agent.agent_id} agent={agent} />
+          <AgentCard
+            key={agent.agent_id}
+            agent={agent}
+            isSelected={selectedAgent === agent.agent_id}
+            onSelect={() =>
+              selectAgent(selectedAgent === agent.agent_id ? undefined : agent.agent_id)
+            }
+          />
         ))}
       </div>
 

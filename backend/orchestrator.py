@@ -15,7 +15,7 @@ from langgraph.graph import StateGraph, END
 from agents.ceo import CEOAgent
 from agents.designer import DesignerAgent
 from agents.developer import DeveloperAgent
-from schemas import Task, TaskResult
+from schemas import Task, TaskResult, WSEvent
 
 
 logger = structlog.get_logger(__name__)
@@ -61,7 +61,8 @@ class AgentOrchestrator:
         self,
         ceo_agent: CEOAgent,
         designer_agent: DesignerAgent,
-        developer_agent: DeveloperAgent
+        developer_agent: DeveloperAgent,
+        websocket_manager=None
     ):
         """
         Initialize orchestrator with agents.
@@ -70,14 +71,32 @@ class AgentOrchestrator:
             ceo_agent: CEO Agent instance
             designer_agent: Designer Agent instance
             developer_agent: Developer Agent instance
+            websocket_manager: Optional WebSocket manager used to broadcast
+                workflow-level events. Individual agents broadcast their own
+                state changes; this covers the run as a whole.
         """
         self.ceo = ceo_agent
         self.designer = designer_agent
         self.developer = developer_agent
+        self.websocket_manager = websocket_manager
         self.logger = logger.bind(component="orchestrator")
 
         # Build workflow graph
         self.workflow = self._build_workflow()
+
+    async def _broadcast(self, event_type: str, payload: dict) -> None:
+        """Broadcast a workflow-level event if a WebSocket manager is attached."""
+        if not self.websocket_manager:
+            return
+
+        await self.websocket_manager.broadcast(
+            WSEvent(
+                event_type=event_type,
+                agent_id=None,
+                timestamp=datetime.utcnow(),
+                payload=payload
+            )
+        )
 
     def _build_workflow(self) -> StateGraph:
         """
@@ -335,6 +354,12 @@ class AgentOrchestrator:
         """
         self.logger.info("orchestration_started", proposal=proposal[:100])
 
+        await self._broadcast("ORCHESTRATION_STARTED", {"proposal": proposal})
+
+        # Clear state left over from a previous run so tasks are not re-delegated
+        self.ceo.current_proposal = None
+        self.ceo.delegated_tasks = []
+
         # Initialize state
         initial_state: OrchestratorState = {
             "proposal": proposal,
@@ -359,11 +384,27 @@ class AgentOrchestrator:
                 errors=len(final_state["errors"])
             )
 
+            await self._broadcast("ORCHESTRATION_COMPLETE", {
+                "completed": final_state["completed"],
+                "design_tasks": len(final_state["design_tasks"]),
+                "development_tasks": len(final_state["development_tasks"]),
+                "design_results": len(final_state["design_results"]),
+                "dev_results": len(final_state["dev_results"]),
+                "errors": final_state["errors"],
+                "summary": self.get_summary(final_state)
+            })
+
             return final_state
 
         except Exception as e:
             self.logger.error("orchestration_error", error=str(e))
             initial_state["errors"].append(f"Orchestration error: {str(e)}")
+
+            await self._broadcast("ORCHESTRATION_FAILED", {
+                "error": str(e),
+                "errors": initial_state["errors"]
+            })
+
             return initial_state
 
     def get_summary(self, state: OrchestratorState) -> str:

@@ -100,7 +100,7 @@ export function EventLog() {
   }, [events]);
 
   return (
-    <div className="absolute top-4 left-4 w-96 h-[calc(100vh-8rem)] bg-gray-900/95 backdrop-blur-sm border border-gray-700 rounded-lg shadow-xl flex flex-col">
+    <div className="absolute top-20 left-8 w-96 h-[calc(100vh-24rem)] bg-slate-900/90 backdrop-blur-xl border border-slate-800/50 rounded-2xl shadow-2xl flex flex-col">
       <div className="p-4 border-b border-gray-700">
         <h2 className="text-lg font-bold text-white flex items-center gap-2">
           <ScrollText size={20} className="text-blue-400" />

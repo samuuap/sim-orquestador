@@ -366,11 +366,6 @@ class UniversalLLMProvider:
                 await asyncio.sleep(2 ** attempt)
 
 
-# Create global instance based on config
 def create_llm_provider() -> UniversalLLMProvider:
-    """Create and return configured LLM provider."""
+    """Create and return a provider configured from application settings."""
     return UniversalLLMProvider()
-
-
-# Global LLM provider instance
-llm_provider = create_llm_provider()

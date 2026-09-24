@@ -7,21 +7,38 @@ import type { WSEvent } from '@/types';
 type WSEventHandler = (event: WSEvent) => void;
 type ConnectionHandler = (connected: boolean) => void;
 
+/**
+ * Backend WebSocket URL.
+ *
+ * Comes from VITE_WS_URL when set; otherwise it is derived from the page
+ * origin so the app also works behind the Vite dev proxy and in production
+ * builds served from the same host as the API.
+ */
+export function resolveWsUrl(): string {
+  const configured = import.meta.env.VITE_WS_URL;
+  if (configured) return configured;
+
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${window.location.host}/ws/office`;
+}
+
 class WebSocketService {
   private ws: WebSocket | null = null;
   private reconnectTimeout: number | null = null;
+  private intentionallyClosed = false;
   private reconnectDelay = 1000;
   private maxReconnectDelay = 30000;
   private eventHandlers: Set<WSEventHandler> = new Set();
   private connectionHandlers: Set<ConnectionHandler> = new Set();
 
-  connect(url: string = 'ws://localhost:8000/ws/office') {
+  connect(url: string = resolveWsUrl()) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       console.log('[WS] Already connected');
       return;
     }
 
     console.log('[WS] Connecting to', url);
+    this.intentionallyClosed = false;
 
     try {
       this.ws = new WebSocket(url);
@@ -49,7 +66,9 @@ class WebSocketService {
       this.ws.onclose = () => {
         console.log('[WS] Disconnected');
         this.notifyConnectionHandlers(false);
-        this.scheduleReconnect(url);
+        if (!this.intentionallyClosed) {
+          this.scheduleReconnect(url);
+        }
       };
     } catch (error) {
       console.error('[WS] Connection failed:', error);
@@ -59,6 +78,7 @@ class WebSocketService {
 
   disconnect() {
     console.log('[WS] Disconnecting...');
+    this.intentionallyClosed = true;
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
@@ -69,12 +89,21 @@ class WebSocketService {
     }
   }
 
-  send(data: any) {
+  send(data: unknown): boolean {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
-    } else {
-      console.warn('[WS] Cannot send, not connected');
+      return true;
     }
+    console.warn('[WS] Cannot send, not connected');
+    return false;
+  }
+
+  /** Submit a project proposal to the CEO agent. */
+  submitProposal(proposal: string): boolean {
+    return this.send({
+      type: 'SUBMIT_PROPOSAL',
+      payload: { proposal },
+    });
   }
 
   onEvent(handler: WSEventHandler) {

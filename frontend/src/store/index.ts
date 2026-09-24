@@ -3,16 +3,18 @@
  */
 
 import { create } from 'zustand';
-import type { Agent, Task, WSEvent, ConnectionInfo, AppState } from '@/types';
+import type { Agent, Task, WSEvent, AppState } from '@/types';
 
 interface AppStore extends AppState {
   // Actions
   setConnection: (connected: boolean, error?: string, reconnectAttempts?: number) => void;
   updateAgent: (agent: Agent) => void;
+  patchAgent: (agentId: string, updates: Partial<Agent>) => void;
   addTask: (task: Task) => void;
   updateTask: (taskId: string, updates: Partial<Task>) => void;
   addEvent: (event: WSEvent) => void;
   setProposal: (proposal: string) => void;
+  setProcessing: (isProcessing: boolean) => void;
   selectAgent: (agentId?: string) => void;
   toggleMetrics: () => void;
   toggleEventLog: () => void;
@@ -64,8 +66,11 @@ const initialState: AppState = {
   tasks: [],
   events: [],
   currentProposal: '',
+  isProcessing: false,
   selectedAgent: undefined,
-  showMetrics: true,
+  // Right-hand column shows AgentDetailsPanel by default and swaps to the
+  // full MetricsPanel when toggled, so the two never overlap.
+  showMetrics: false,
   showEventLog: true,
 };
 
@@ -90,6 +95,22 @@ export const useAppStore = create<AppStore>((set) => ({
       },
     })),
 
+  // Merge updates into an existing agent, leaving 3D placement (position,
+  // rotation) and any untouched metrics alone. Unknown agents are ignored so a
+  // stray event cannot create a half-built avatar.
+  patchAgent: (agentId, updates) =>
+    set((state) => {
+      const current = state.agents[agentId];
+      if (!current) return state;
+
+      return {
+        agents: {
+          ...state.agents,
+          [agentId]: { ...current, ...updates },
+        },
+      };
+    }),
+
   addTask: (task) =>
     set((state) => ({
       tasks: [...state.tasks, task],
@@ -109,6 +130,9 @@ export const useAppStore = create<AppStore>((set) => ({
 
   setProposal: (proposal) =>
     set({ currentProposal: proposal }),
+
+  setProcessing: (isProcessing) =>
+    set({ isProcessing }),
 
   selectAgent: (agentId) =>
     set({ selectedAgent: agentId }),

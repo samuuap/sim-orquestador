@@ -8,7 +8,7 @@ import uuid
 import structlog
 from pydantic import BaseModel, Field
 
-from schemas import WSEvent, Task, Message
+from schemas import WSEvent, Task, Message, TaskResult
 
 
 logger = structlog.get_logger()
@@ -22,17 +22,6 @@ class AgentState(str, Enum):
     WAITING = "WAITING"
     COMPLETED = "COMPLETED"
     ERROR = "ERROR"
-
-
-class TaskResult(BaseModel):
-    """Result of a task execution."""
-    task_id: str
-    success: bool
-    output: str
-    duration: float = Field(..., description="Execution time in seconds")
-    artifacts: Dict[str, Any] = Field(default_factory=dict, description="Additional output data")
-    error: Optional[str] = None
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
 class AgentMetrics(BaseModel):
@@ -126,6 +115,28 @@ class BaseAgent(ABC):
             )
             await self.websocket_manager.broadcast(event)
 
+    async def _broadcast_event(self, event_type: str, payload: Dict[str, Any]) -> None:
+        """
+        Broadcast a domain event for this agent over the WebSocket manager.
+
+        Builds a proper :class:`WSEvent` -- the manager serialises it, so a bare
+        dict would blow up on ``model_dump``.
+
+        Args:
+            event_type: Event name, e.g. ``CEO_EVALUATING``.
+            payload: Event-specific data.
+        """
+        if not self.websocket_manager:
+            return
+
+        event = WSEvent(
+            event_type=event_type,
+            agent_id=self.agent_id,
+            timestamp=datetime.utcnow(),
+            payload=payload
+        )
+        await self.websocket_manager.broadcast(event)
+
     async def assign_task(self, task: Task) -> TaskResult:
         """
         Assign and execute a task.
@@ -180,7 +191,10 @@ class BaseAgent(ABC):
                         "success": result.success,
                         "output": result.output,
                         "duration": duration,
-                        "error": result.error
+                        "error": result.error,
+                        # Cumulative counters so clients can render live metrics
+                        # without keeping their own tally.
+                        "metrics": self.metrics.model_dump()
                     }
                 )
                 await self.websocket_manager.broadcast(event)
@@ -197,6 +211,7 @@ class BaseAgent(ABC):
 
             result = TaskResult(
                 task_id=task.task_id,
+                agent_id=self.agent_id,
                 success=False,
                 output="",
                 duration=0.0,
