@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0"
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "check:nav": "esbuild scripts/nav-check.ts --bundle --format=esm --platform=node --outfile=node_modules/.cache/nav-check.mjs --alias:@=./src --log-level=error && node node_modules/.cache/nav-check.mjs",
+    "check:pose": "esbuild scripts/pose-check.ts --bundle --format=esm --platform=node --outfile=node_modules/.cache/pose-check.mjs --alias:@=./src --log-level=error && node node_modules/.cache/pose-check.mjs",
+    "check:prompt": "esbuild scripts/prompt-sections-check.ts --bundle --format=esm --platform=node --outfile=node_modules/.cache/prompt-check.mjs --alias:@=./src --log-level=error && node node_modules/.cache/prompt-check.mjs",
+    "check:flow": "esbuild scripts/flow-check.ts --bundle --format=esm --platform=node --outfile=node_modules/.cache/flow-check.mjs --alias:@=./src --log-level=error && node node_modules/.cache/flow-check.mjs"
   },
   "dependencies": {
     "react": "^18.3.1",

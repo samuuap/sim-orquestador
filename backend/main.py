@@ -144,6 +144,7 @@ class SimulationRuntime:
         from agents.ceo import CEOAgent
         from agents.designer import DesignerAgent
         from agents.developer import DeveloperAgent
+        from agents.project_manager import ProjectManagerAgent
         from agents.llm_provider import get_llm_provider
         from orchestrator import AgentOrchestrator
 
@@ -164,12 +165,22 @@ class SimulationRuntime:
             llm_provider=provider,
             websocket_manager=self.websocket_manager
         )
+        project_manager = ProjectManagerAgent(
+            agent_id="pm_001",
+            llm_provider=provider,
+            websocket_manager=self.websocket_manager
+        )
 
-        self.agents = {agent.agent_id: agent for agent in (ceo, designer, developer)}
+        # Order matters for the UI: agents render in this order in the roster.
+        self.agents = {
+            agent.agent_id: agent
+            for agent in (ceo, project_manager, designer, developer)
+        }
         self.orchestrator = AgentOrchestrator(
             ceo_agent=ceo,
             designer_agent=designer,
             developer_agent=developer,
+            pm_agent=project_manager,
             websocket_manager=self.websocket_manager
         )
 
@@ -344,6 +355,98 @@ async def submit_proposal(request: ProposalRequest):
 async def get_agents():
     """Get the current status of every agent."""
     return {"agents": runtime.agent_statuses(), "orchestrator_busy": runtime.is_busy}
+
+
+class PromptUpdate(BaseModel):
+    """Body of a system-prompt edit."""
+
+    prompt: str = Field(min_length=1, description="Replacement system prompt")
+
+
+def _require_agent(agent_id: str):
+    """Look up an agent or 404."""
+    agent = runtime.agents.get(agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail=f"Unknown agent: {agent_id}")
+    return agent
+
+
+def _prompt_payload(agent_id: str, agent) -> Dict[str, Any]:
+    """
+    Shape returned by every prompt endpoint.
+
+    `modified` compares the live prompt against the file on disk, so the UI can show when an agent
+    is running on an edited prompt rather than the committed one.
+    """
+    prompt = getattr(agent, "system_prompt", "") or ""
+    try:
+        on_disk = agent._load_system_prompt()
+    except Exception:  # noqa: BLE001 - a missing prompt file must not break the endpoint
+        on_disk = prompt
+
+    return {
+        "agent_id": agent_id,
+        "role": agent.role,
+        "characters": len(prompt),
+        "prompt": prompt,
+        "modified": prompt != on_disk,
+    }
+
+
+@app.get("/api/agents/{agent_id}/prompt")
+async def get_agent_prompt(agent_id: str) -> Dict[str, Any]:
+    """
+    Return the system prompt driving one agent.
+
+    Surfaced so the UI can show what actually governs an agent's behaviour. These prompts are the
+    substance of the simulation - the CEO's is 9.5k characters and the Developer's is 15.5k - and
+    until now they were invisible outside the repository.
+    """
+    return _prompt_payload(agent_id, _require_agent(agent_id))
+
+
+@app.put("/api/agents/{agent_id}/prompt")
+async def update_agent_prompt(agent_id: str, update: PromptUpdate) -> Dict[str, Any]:
+    """
+    Replace an agent's system prompt for this process only.
+
+    Agents read `self.system_prompt` at call time, so the change applies to the next task with no
+    restart - which is the point: edit the prompt, submit a proposal, see the behaviour change.
+
+    Deliberately NOT written to prompts/*.md. Editing in memory is reversible and keeps the
+    repository as the source of truth; a reload restores the committed prompt.
+    """
+    agent = _require_agent(agent_id)
+
+    if runtime.is_busy:
+        raise HTTPException(
+            status_code=409,
+            detail="Orchestration in progress; wait for it to finish before editing prompts.",
+        )
+
+    agent.system_prompt = update.prompt
+    logger.info(
+        "system_prompt_updated",
+        agent_id=agent_id,
+        characters=len(update.prompt),
+    )
+    return _prompt_payload(agent_id, agent)
+
+
+@app.post("/api/agents/{agent_id}/prompt/reset")
+async def reset_agent_prompt(agent_id: str) -> Dict[str, Any]:
+    """Reload the agent's system prompt from its file on disk, discarding in-memory edits."""
+    agent = _require_agent(agent_id)
+
+    if runtime.is_busy:
+        raise HTTPException(
+            status_code=409,
+            detail="Orchestration in progress; wait for it to finish before editing prompts.",
+        )
+
+    agent.system_prompt = agent._load_system_prompt()
+    logger.info("system_prompt_reset", agent_id=agent_id)
+    return _prompt_payload(agent_id, agent)
 
 
 async def _handle_client_message(data: Dict[str, Any], client_id: str) -> None:

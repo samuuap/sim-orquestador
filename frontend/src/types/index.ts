@@ -2,7 +2,7 @@
  * TypeScript types for Office Agents Simulator frontend
  */
 
-export type AgentRole = 'ceo' | 'designer' | 'developer';
+export type AgentRole = 'ceo' | 'project_manager' | 'designer' | 'developer';
 
 export type AgentState = 'IDLE' | 'THINKING' | 'WORKING' | 'WAITING' | 'COMPLETED' | 'ERROR';
 
@@ -98,6 +98,23 @@ export interface BackendAgentMetrics {
 }
 
 // Store state
+export interface ActiveMeeting {
+  /** Room id, matching ROOMS in behavior/officeMap. */
+  room: string;
+  /** Agent ids attending, in the order the backend listed them. */
+  participants: string[];
+  topic: string;
+}
+
+/** One spoken line, pushed by the orchestrator while a meeting is running. */
+export interface ActiveDialogue {
+  speaker: string;
+  text: string;
+  seconds: number;
+  /** Monotonic counter so a repeated line still registers as new. */
+  id: number;
+}
+
 export interface AppState {
   // Connection
   connectionInfo: ConnectionInfo;
@@ -116,6 +133,13 @@ export interface AppState {
 
   // True while the backend is orchestrating a proposal
   isProcessing: boolean;
+
+  // Set while the backend has agents gathered in a room. Drives the meeting choreography:
+  // participants abandon whatever they were doing and walk to their seat.
+  activeMeeting: ActiveMeeting | null;
+
+  // The line currently being spoken in that meeting, if any.
+  activeDialogue: ActiveDialogue | null;
 
   // UI state
   selectedAgent?: string;

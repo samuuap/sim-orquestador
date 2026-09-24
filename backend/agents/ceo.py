@@ -126,6 +126,10 @@ class CEOAgent(BaseAgent):
             "proposal": task.description[:200]
         })
 
+        # Real work starts here. Without this the agent never leaves THINKING, so the desk
+        # "working" animation in the 3D client never plays.
+        await self._change_state(AgentState.WORKING, {"task_id": task.task_id})
+
         # Generate structured CEO output
         ceo_output = await self._analyze_proposal(task.description)
         self.current_proposal = ceo_output

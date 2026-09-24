@@ -35,7 +35,9 @@ class Task(BaseModel):
     """Task model for agent assignments."""
     task_id: str
     description: str
-    task_type: Literal["design", "development", "evaluation", "planning"]
+    task_type: Literal[
+        "design", "development", "evaluation", "planning", "pm_planning", "pm_standup"
+    ]
     priority: int = Field(default=1, ge=1, le=5, description="Priority level (1=highest, 5=lowest)")
     assigned_to: Optional[str] = None
     status: Literal["queued", "in_progress", "completed", "failed"] = "queued"

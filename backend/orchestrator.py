@@ -6,6 +6,8 @@ Manages task dependencies, state transitions, and progress tracking.
 """
 
 import asyncio
+import os
+from contextlib import asynccontextmanager
 from typing import TypedDict, Annotated, Literal, Optional
 from datetime import datetime
 
@@ -15,10 +17,22 @@ from langgraph.graph import StateGraph, END
 from agents.ceo import CEOAgent
 from agents.designer import DesignerAgent
 from agents.developer import DeveloperAgent
+from conversation import Line, briefing_script, script_seconds, standup_script
 from schemas import Task, TaskResult, WSEvent
 
 
 logger = structlog.get_logger(__name__)
+
+# Minimum wall-clock duration of each meeting, in seconds. The mock provider answers in
+# milliseconds, so without a floor the characters would appear and vanish in the same frame.
+# How long the participants get to walk in and sit down before anyone speaks. The backend cannot
+# observe the animation, so this is a fixed allowance for the journey plus sitting.
+# Measured, not guessed: the longest desk-to-seat walk in the current floor plan is ~10.3s at the
+# summoned pace, plus ~0.8s to sit. frontend `npm run check:flow` asserts this value still covers
+# the real geometry, so moving a desk or a room cannot silently start the conversation early.
+SETTLE_SECONDS = float(os.getenv("MEETING_SETTLE_SECONDS", "12.5"))
+# Beat after the last line, before everyone gets up.
+OUTRO_SECONDS = float(os.getenv("MEETING_OUTRO_SECONDS", "2"))
 
 
 class OrchestratorState(TypedDict):
@@ -29,6 +43,11 @@ class OrchestratorState(TypedDict):
     # CEO outputs
     ceo_evaluation: Optional[TaskResult]
     ceo_plan: Optional[TaskResult]
+
+    # Project Manager outputs
+    pm_plan: Optional[TaskResult]
+    pm_standup: Optional[TaskResult]
+
     design_tasks: list[Task]
     development_tasks: list[Task]
 
@@ -62,7 +81,8 @@ class AgentOrchestrator:
         ceo_agent: CEOAgent,
         designer_agent: DesignerAgent,
         developer_agent: DeveloperAgent,
-        websocket_manager=None
+        websocket_manager=None,
+        pm_agent=None,
     ):
         """
         Initialize orchestrator with agents.
@@ -74,10 +94,15 @@ class AgentOrchestrator:
             websocket_manager: Optional WebSocket manager used to broadcast
                 workflow-level events. Individual agents broadcast their own
                 state changes; this covers the run as a whole.
+            pm_agent: Optional Project Manager. When present the workflow routes
+                through two meetings - a CEO/PM briefing and a team standup - and
+                the PM owns the final task breakdown. When absent the original
+                three-agent flow runs unchanged, which keeps existing tests valid.
         """
         self.ceo = ceo_agent
         self.designer = designer_agent
         self.developer = developer_agent
+        self.pm = pm_agent
         self.websocket_manager = websocket_manager
         self.logger = logger.bind(component="orchestrator")
 
@@ -98,6 +123,56 @@ class AgentOrchestrator:
             )
         )
 
+    @asynccontextmanager
+    async def _meeting(self, room: str, participants: list[str], topic: str):
+        """
+        Run a block of work as a visible meeting.
+
+        Broadcasts MEETING_STARTED, runs the body, and broadcasts MEETING_ENDED afterwards. The
+        body is expected to do the work and then play a conversation with `_play`, which is what
+        gives the meeting its length. Nothing is padded: a meeting lasts exactly as long as the
+        walking-in allowance plus the dialogue it actually has.
+        """
+        started = asyncio.get_event_loop().time()
+        await self._broadcast("MEETING_STARTED", {
+            "room": room,
+            "participants": participants,
+            "topic": topic,
+            # Published so the client, which owns the floor plan, can verify the allowance is
+            # still long enough for everyone to walk in and sit down.
+            "settle_seconds": SETTLE_SECONDS,
+        })
+        self.logger.info("meeting_started", room=room, participants=participants)
+
+        try:
+            yield
+        finally:
+            await asyncio.sleep(OUTRO_SECONDS)
+            await self._broadcast("MEETING_ENDED", {"room": room, "participants": participants})
+            self.logger.info(
+                "meeting_ended",
+                room=room,
+                total_seconds=round(asyncio.get_event_loop().time() - started, 2),
+            )
+
+    async def _play(self, lines: list[Line]) -> None:
+        """
+        Speak a scripted conversation, one line at a time.
+
+        Each line is broadcast as it starts and held for its own duration, so the client can show
+        it as speech and give that agent the floor. Playback is sequential by design: two agents
+        talking at once reads as noise rather than a meeting.
+        """
+        for index, line in enumerate(lines):
+            await self._broadcast("MEETING_DIALOGUE", {
+                "speaker": line.speaker,
+                "text": line.text,
+                "seconds": line.seconds,
+                "index": index,
+                "total": len(lines),
+            })
+            await asyncio.sleep(line.seconds)
+
     def _build_workflow(self) -> StateGraph:
         """
         Build LangGraph workflow for agent orchestration.
@@ -109,16 +184,31 @@ class AgentOrchestrator:
 
         # Add nodes
         workflow.add_node("evaluate_proposal", self._ceo_evaluate_node)
-        workflow.add_node("create_plan", self._ceo_plan_node)
         workflow.add_node("design_work", self._designer_work_node)
         workflow.add_node("development_work", self._developer_work_node)
         workflow.add_node("finalize_results", self._finalize_node)
 
+        if self.pm:
+            # CEO planning happens inside the briefing rather than as its own node, so the
+            # conversation on screen covers real work. Registering create_plan as well would
+            # leave it unreachable and LangGraph rejects the graph.
+            workflow.add_node("ceo_pm_briefing", self._ceo_pm_briefing_node)
+            workflow.add_node("team_standup", self._team_standup_node)
+        else:
+            workflow.add_node("create_plan", self._ceo_plan_node)
+
         # Define edges
         workflow.set_entry_point("evaluate_proposal")
 
-        workflow.add_edge("evaluate_proposal", "create_plan")
-        workflow.add_edge("create_plan", "design_work")
+        if self.pm:
+            # CEO evaluates alone, then briefs the PM in the office; the PM refines the plan
+            # there and afterwards gathers the team in the meeting room.
+            workflow.add_edge("evaluate_proposal", "ceo_pm_briefing")
+            workflow.add_edge("ceo_pm_briefing", "team_standup")
+            workflow.add_edge("team_standup", "design_work")
+        else:
+            workflow.add_edge("evaluate_proposal", "create_plan")
+            workflow.add_edge("create_plan", "design_work")
         workflow.add_edge("design_work", "development_work")
         workflow.add_edge("development_work", "finalize_results")
         workflow.add_edge("finalize_results", END)
@@ -218,6 +308,115 @@ class AgentOrchestrator:
             state["errors"].append(f"CEO planning error: {str(e)}")
 
         return state
+
+    async def _ceo_pm_briefing_node(self, state: OrchestratorState) -> OrchestratorState:
+        """
+        The CEO briefs the Project Manager, in the office.
+
+        Both the CEO's task breakdown and the PM's refinement of it happen inside the meeting, so
+        the conversation on screen corresponds to real work rather than a pause.
+        """
+        self.logger.info("ceo_pm_briefing_started")
+
+        async with self._meeting(
+            room="office",
+            participants=[self.ceo.agent_id, self.pm.agent_id],
+            topic="Handing over the evaluation and agreeing the delivery plan",
+        ):
+            # Everyone needs to walk in and sit down before anyone talks.
+            await asyncio.sleep(SETTLE_SECONDS)
+            state = await self._ceo_plan_node(state)
+
+            ceo_plan = state.get("ceo_plan")
+            if not ceo_plan or not ceo_plan.success:
+                state["errors"].append("Cannot brief the PM: the CEO plan is missing")
+                return state
+
+            pm_task = Task(
+                task_id=f"pm_plan_{datetime.utcnow().timestamp()}",
+                description=ceo_plan.output,
+                task_type="pm_planning",
+                priority=1,
+                assigned_to=self.pm.agent_id,
+                status="in_progress",
+                created_at=datetime.utcnow(),
+            )
+            result = await self.pm.assign_task(pm_task)
+            state["pm_plan"] = result
+            state["current_step"] = "ceo_pm_briefing"
+
+            if result.success and self.pm.plan:
+                # The PM owns the final breakdown; the CEO's list was the first pass.
+                state["design_tasks"] = [
+                    self._to_task(t) for t in self.pm.plan.design_tasks
+                ]
+                state["development_tasks"] = [
+                    self._to_task(t) for t in self.pm.plan.development_tasks
+                ]
+                self.logger.info(
+                    "ceo_pm_briefing_completed",
+                    design_tasks=len(state["design_tasks"]),
+                    dev_tasks=len(state["development_tasks"]),
+                )
+            else:
+                state["errors"].append(f"PM planning failed: {result.error}")
+
+            # The decisions have been made; now they are said out loud, sourced from the
+            # actual evaluation and plan rather than from filler.
+            lines = briefing_script(
+                state["proposal"],
+                getattr(self.ceo, "current_proposal", None),
+                self.pm.plan,
+            )
+            self.logger.info("briefing_dialogue", lines=len(lines), seconds=round(script_seconds(lines), 1))
+            await self._play(lines)
+
+        return state
+
+    async def _team_standup_node(self, state: OrchestratorState) -> OrchestratorState:
+        """The PM gathers the designer and developer and briefs them on the plan."""
+        self.logger.info("team_standup_started")
+
+        async with self._meeting(
+            room="meeting_room",
+            participants=[self.pm.agent_id, self.designer.agent_id, self.developer.agent_id],
+            topic="Standup: task assignment and sequencing",
+        ):
+            await asyncio.sleep(SETTLE_SECONDS)
+            standup_task = Task(
+                task_id=f"pm_standup_{datetime.utcnow().timestamp()}",
+                description="Brief the team on the delivery plan",
+                task_type="pm_standup",
+                priority=1,
+                assigned_to=self.pm.agent_id,
+                status="in_progress",
+                created_at=datetime.utcnow(),
+            )
+            result = await self.pm.assign_task(standup_task)
+            state["pm_standup"] = result
+            state["current_step"] = "team_standup"
+
+            if not result.success:
+                state["errors"].append(f"Standup failed: {result.error}")
+
+            lines = standup_script(self.pm.plan)
+            self.logger.info("standup_dialogue", lines=len(lines), seconds=round(script_seconds(lines), 1))
+            await self._play(lines)
+
+        return state
+
+    @staticmethod
+    def _to_task(planned) -> Task:
+        """Convert a PlannedTask from the PM's schema into an executable Task."""
+        return Task(
+            task_id=planned.task_id,
+            description=planned.description,
+            task_type="design" if planned.assigned_to == "designer" else "development",
+            priority=planned.priority,
+            assigned_to=planned.assigned_to,
+            status="queued",
+            created_at=datetime.utcnow(),
+        )
 
     async def _designer_work_node(self, state: OrchestratorState) -> OrchestratorState:
         """
@@ -365,6 +564,8 @@ class AgentOrchestrator:
             "proposal": proposal,
             "ceo_evaluation": None,
             "ceo_plan": None,
+            "pm_plan": None,
+            "pm_standup": None,
             "design_tasks": [],
             "development_tasks": [],
             "design_results": [],

@@ -45,8 +45,12 @@ class MockLLMProvider:
         """
         self.call_count += 1
 
-        # Detect which agent is calling based on system prompt
-        if system_prompt and "CEO Agent" in system_prompt:
+        # Detect which agent is calling based on system prompt.
+        # Project Manager is checked first: its prompt mentions designers and developers, so a
+        # later branch would swallow it.
+        if system_prompt and "Project Manager" in system_prompt:
+            content = self._mock_pm_response(prompt)
+        elif system_prompt and "CEO Agent" in system_prompt:
             content = self._mock_ceo_response(prompt)
         elif system_prompt and "Designer" in system_prompt:
             content = self._mock_designer_response(prompt)
@@ -449,6 +453,116 @@ class MockLLMProvider:
             ],
             "notes": "Consider adding user authentication in next iteration"
         }, indent=2)
+
+    def _mock_pm_response(self, prompt: str) -> str:
+        """
+        Project Manager planning output.
+
+        Mirrors the shape a real model would return: it splits one of the CEO's tasks, flags a
+        dependency the CEO missed, and assigns every task to exactly one owner.
+        """
+        return json.dumps({
+            "plan_summary": (
+                "Design leads, development follows. The task list survives mostly intact, but the "
+                "CRUD API is split so the schema lands before the endpoints, and the frontend list "
+                "is blocked on the design mockup rather than running alongside it."
+            ),
+            "brief_adjustments": [
+                {
+                    "kind": "split",
+                    "target": "Implement task CRUD API",
+                    "reason": "Schema and endpoints have different risk profiles and different "
+                              "people are blocked on each; one estimate would hide both.",
+                },
+                {
+                    "kind": "reorder",
+                    "target": "Implement frontend task list",
+                    "reason": "It was scheduled in parallel with the mockup it depends on.",
+                },
+            ],
+            "phases": [
+                {
+                    "phase_number": 1,
+                    "name": "Shape and schema",
+                    "goal": "The data model is agreed and the main screen is drawn.",
+                    "task_ids": ["design_001", "dev_001"],
+                    "blocked_by": [],
+                },
+                {
+                    "phase_number": 2,
+                    "name": "Build",
+                    "goal": "Users can create and see their tasks end to end.",
+                    "task_ids": ["design_002", "dev_002", "dev_003"],
+                    "blocked_by": [1],
+                },
+            ],
+            "tasks": [
+                {
+                    "task_id": "design_001",
+                    "description": "Design the task list view: filtering, sorting and empty state",
+                    "assigned_to": "designer",
+                    "priority": 1,
+                    "estimated_hours": 6.0,
+                    "depends_on": [],
+                },
+                {
+                    "task_id": "dev_001",
+                    "description": "Define and migrate the task database schema",
+                    "assigned_to": "developer",
+                    "priority": 1,
+                    "estimated_hours": 4.0,
+                    "depends_on": [],
+                },
+                {
+                    "task_id": "design_002",
+                    "description": "Design the task creation and edit form, including validation states",
+                    "assigned_to": "designer",
+                    "priority": 2,
+                    "estimated_hours": 5.0,
+                    "depends_on": ["design_001"],
+                },
+                {
+                    "task_id": "dev_002",
+                    "description": "Build the REST endpoints for task CRUD on top of the schema",
+                    "assigned_to": "developer",
+                    "priority": 2,
+                    "estimated_hours": 8.0,
+                    "depends_on": ["dev_001"],
+                },
+                {
+                    "task_id": "dev_003",
+                    "description": "Build the React task list against the agreed mockup",
+                    "assigned_to": "developer",
+                    "priority": 3,
+                    "estimated_hours": 7.0,
+                    "depends_on": ["design_001", "dev_002"],
+                },
+            ],
+            "risks": [
+                {
+                    "description": "Auth is assumed but no provider has been chosen",
+                    "likelihood": "high",
+                    "impact": "high",
+                    "mitigation": "Pin the provider in phase 1 before the endpoints are written.",
+                },
+                {
+                    "description": "Filtering requirements are described but not specified",
+                    "likelihood": "medium",
+                    "impact": "low",
+                    "mitigation": "Ship status filtering only; treat the rest as a follow-up.",
+                },
+            ],
+            "questions_for_ceo": [
+                "Is a third-party auth provider acceptable, or does this need to be self-hosted?",
+            ],
+            "standup_brief": (
+                "Two phases. Ash, you own the list view first, then the form - the form depends on "
+                "the list layout being settled. Kai, schema before endpoints, and hold the React "
+                "list until Ash's mockup lands. Auth provider is unresolved and it blocks the API, "
+                "so flag it if you hit it."
+            ),
+            "notes": "Generated by the mock provider.",
+        })
 
     def _mock_generic_response(self, prompt: str) -> str:
         """Generate generic mock response."""

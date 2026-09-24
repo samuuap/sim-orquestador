@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "skills": {
+    "disney-animation-rule-skill": {
+      "source": "vibe-motion/skills",
+      "sourceType": "github",
+      "skillPath": "disney-animation-rule-skill/SKILL.md",
+      "computedHash": "963e97ed3e23705c3249acd9a124a1ee1a4fb7a7684c0a1bc0b1994517f2e3a2"
+    },
+    "pose-library-design": {
+      "source": "calesthio/openmontage",
+      "sourceType": "github",
+      "skillPath": ".agents/skills/pose-library-design/SKILL.md",
+      "computedHash": "4fca9f6c9774fcdd4a71293d2745cc5492cce960d8e0947679702aaea9dc6030"
+    },
+    "threejs-aaa-graphics-builder": {
+      "source": "majidmanzarpour/threejs-game-skills",
+      "sourceType": "github",
+      "skillPath": "skills/threejs-aaa-graphics-builder/SKILL.md",
+      "computedHash": "5168e4b1d40dd0f7163a5319fa4a29194a495fcf8a7fe1298212a2a24224466d"
+    },
+    "threejs-debug-profiler": {
+      "source": "majidmanzarpour/threejs-game-skills",
+      "sourceType": "github",
+      "skillPath": "skills/threejs-debug-profiler/SKILL.md",
+      "computedHash": "9c195bd449fc3aee1381ce0603988945dc206b4f89996a63b2e308cd4614cfc9"
+    }
+  }
+}

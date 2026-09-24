@@ -3,7 +3,8 @@
  */
 
 import { create } from 'zustand';
-import type { Agent, Task, WSEvent, AppState } from '@/types';
+import type {
+  ActiveMeeting, Agent, Task, WSEvent, AppState } from '@/types';
 
 interface AppStore extends AppState {
   // Actions
@@ -15,6 +16,9 @@ interface AppStore extends AppState {
   addEvent: (event: WSEvent) => void;
   setProposal: (proposal: string) => void;
   setProcessing: (isProcessing: boolean) => void;
+  setMeeting: (meeting: ActiveMeeting | null) => void;
+  setDialogue: (speaker: string, text: string, seconds: number) => void;
+  clearDialogue: () => void;
   selectAgent: (agentId?: string) => void;
   toggleMetrics: () => void;
   toggleEventLog: () => void;
@@ -33,7 +37,18 @@ const initialState: AppState = {
       agent_id: 'ceo_001',
       role: 'ceo',
       state: 'IDLE',
-      position: [0, 0, 0],
+      position: [-3, 0, 2],
+      rotation: 0,
+      tasks_completed: 0,
+      total_tokens_used: 0,
+      total_cost: 0,
+      avg_response_time: 0,
+    },
+    pm_001: {
+      agent_id: 'pm_001',
+      role: 'project_manager',
+      state: 'IDLE',
+      position: [3, 0, 2],
       rotation: 0,
       tasks_completed: 0,
       total_tokens_used: 0,
@@ -44,7 +59,7 @@ const initialState: AppState = {
       agent_id: 'designer_001',
       role: 'designer',
       state: 'IDLE',
-      position: [-4, 0, -2],
+      position: [-6.5, 0, -1.5],
       rotation: Math.PI / 4,
       tasks_completed: 0,
       total_tokens_used: 0,
@@ -55,7 +70,7 @@ const initialState: AppState = {
       agent_id: 'developer_001',
       role: 'developer',
       state: 'IDLE',
-      position: [4, 0, -2],
+      position: [6.5, 0, -1.5],
       rotation: -Math.PI / 4,
       tasks_completed: 0,
       total_tokens_used: 0,
@@ -67,6 +82,8 @@ const initialState: AppState = {
   events: [],
   currentProposal: '',
   isProcessing: false,
+  activeMeeting: null,
+  activeDialogue: null,
   selectedAgent: undefined,
   // Right-hand column shows AgentDetailsPanel by default and swaps to the
   // full MetricsPanel when toggled, so the two never overlap.
@@ -130,6 +147,22 @@ export const useAppStore = create<AppStore>((set) => ({
 
   setProposal: (proposal) =>
     set({ currentProposal: proposal }),
+
+  setMeeting: (meeting) =>
+    // Leaving a meeting also clears whatever was being said in it.
+    set(meeting ? { activeMeeting: meeting } : { activeMeeting: null, activeDialogue: null }),
+
+  setDialogue: (speaker, text, seconds) =>
+    set((state) => ({
+      activeDialogue: {
+        speaker,
+        text,
+        seconds,
+        id: (state.activeDialogue?.id ?? 0) + 1,
+      },
+    })),
+
+  clearDialogue: () => set({ activeDialogue: null }),
 
   setProcessing: (isProcessing) =>
     set({ isProcessing }),

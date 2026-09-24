@@ -11,6 +11,9 @@ import type { AgentState, BackendAgentMetrics, WSEvent } from '@/types';
 const TASK_LABELS: Record<string, string> = {
   CEO_EVALUATING: 'Evaluating proposal',
   CEO_PLAN_CREATED: 'Plan created',
+  PM_REVIEWING_BRIEF: 'Reviewing the brief',
+  PM_PLAN_READY: 'Delivery plan ready',
+  PM_BRIEFING_TEAM: 'Briefing the team',
   DESIGNER_ANALYZING: 'Design work',
   DEVELOPER_ANALYZING: 'Development work',
 };
@@ -88,6 +91,36 @@ function reduceEvent(event: WSEvent) {
       return;
     }
 
+    case 'MEETING_STARTED': {
+      // Drives the 3D choreography: participants abandon their desks and walk to this room.
+      const participants = (payload?.participants as string[] | undefined) ?? [];
+      const room = (payload?.room as string | undefined) ?? '';
+      if (room && participants.length > 0) {
+        store.setMeeting({
+          room,
+          participants,
+          topic: (payload?.topic as string | undefined) ?? '',
+        });
+        participants.forEach((id) => store.patchAgent(id, { current_task: `In the ${room.replace('_', ' ')}` }));
+      }
+      return;
+    }
+
+    case 'MEETING_DIALOGUE': {
+      // The backend owns turn-taking: it plays one line at a time, sourced from the real plan.
+      const speaker = payload?.speaker as string | undefined;
+      const text = payload?.text as string | undefined;
+      if (speaker && text) {
+        store.setDialogue(speaker, text, (payload?.seconds as number | undefined) ?? 3);
+      }
+      return;
+    }
+
+    case 'MEETING_ENDED': {
+      store.setMeeting(null);
+      return;
+    }
+
     case 'ORCHESTRATION_STARTED': {
       store.setProcessing(true);
       return;
@@ -96,6 +129,9 @@ function reduceEvent(event: WSEvent) {
     case 'ORCHESTRATION_COMPLETE':
     case 'ORCHESTRATION_FAILED': {
       store.setProcessing(false);
+      // Clear any meeting: an orchestration that ends while agents are gathered would otherwise
+      // leave them seated indefinitely.
+      store.setMeeting(null);
       return;
     }
 

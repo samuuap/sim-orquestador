@@ -2,18 +2,20 @@
  * Agent Details Panel Component
  */
 
-import { User, Brain, Palette, Code, Activity, Zap } from 'lucide-react';
+import { User, Brain, ClipboardList, Palette, Code, Activity, Zap } from 'lucide-react';
 import { useAppStore } from '@/store';
 import type { Agent } from '@/types';
 
 const agentIcons = {
   ceo: Brain,
+  project_manager: ClipboardList,
   designer: Palette,
   developer: Code,
 };
 
 const agentColors = {
   ceo: 'from-red-500 to-orange-500',
+  project_manager: 'from-teal-500 to-emerald-500',
   designer: 'from-purple-500 to-pink-500',
   developer: 'from-blue-500 to-cyan-500',
 };

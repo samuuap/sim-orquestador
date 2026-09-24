@@ -1,11 +1,21 @@
 /**
- * 3D Office Scene Component - Clean Modern Style
+ * Scene root: renderer configuration, lighting rig, camera.
+ *
+ * Changes from the first version, all aimed at the frame budget:
+ *  - Environment preset="city" removed. It downloaded an HDRI and ran a PMREM convolution for
+ *    reflections that a matte office does not show. A hemisphere fill reads the same here.
+ *  - One shadow-casting light instead of shadows on everything, 1024 map instead of 2048, with the
+ *    shadow camera pulled tight around the play area so the resolution goes where it is seen.
+ *  - DPR capped at 1.5. On a Retina panel the previous cap of 2 meant rendering 4x the pixels.
+ *  - ACES tone mapping and a deliberate exposure, so the palette resolves instead of clipping.
  */
 
 import { Canvas } from '@react-three/fiber';
-import { OrbitControls, PerspectiveCamera, Environment } from '@react-three/drei';
+import { OrbitControls, PerspectiveCamera } from '@react-three/drei';
+import * as THREE from 'three';
 import { AgentAvatar } from './AgentAvatar';
 import { Office } from './Office';
+import { RendererDiagnostics } from '@/systems/RendererDiagnostics';
 import { useAppStore } from '@/store';
 
 export function OfficeScene() {
@@ -16,70 +26,62 @@ export function OfficeScene() {
     <div className="w-full h-full">
       <Canvas
         shadows
-        gl={{
-          antialias: true,
-          alpha: false,
+        dpr={[1, 1.5]}
+        gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
+        onCreated={({ gl, scene }) => {
+          gl.toneMapping = THREE.ACESFilmicToneMapping;
+          gl.toneMappingExposure = 1.15;
+          gl.outputColorSpace = THREE.SRGBColorSpace;
+          scene.background = new THREE.Color('#0b1220');
+          // Fog adds depth against the skyline; it is not standing in for missing geometry.
+          scene.fog = new THREE.Fog('#0b1220', 26, 54);
         }}
-        dpr={[1, 2]}
       >
-        {/* Camera - Isometric-style view */}
-        <PerspectiveCamera
-          makeDefault
-          position={[12, 12, 12]}
-          fov={50}
-        />
+        <PerspectiveCamera makeDefault position={[13, 11, 13]} fov={42} />
 
-        {/* Lighting setup - clean and bright */}
-        <ambientLight intensity={0.6} />
+        {/* Fill: sky/ground hemisphere keeps shadowed sides legible without a second shadow map. */}
+        <hemisphereLight args={['#c7d8ff', '#2a2f3d', 0.85]} />
 
+        {/* Key: the only shadow caster in the scene. */}
         <directionalLight
-          position={[10, 15, 5]}
-          intensity={1.2}
+          position={[9, 13, 6]}
+          intensity={2.1}
+          color="#fff4e0"
           castShadow
-          shadow-mapSize={[2048, 2048]}
-          shadow-camera-far={50}
-          shadow-camera-left={-15}
-          shadow-camera-right={15}
-          shadow-camera-top={15}
-          shadow-camera-bottom={-15}
+          shadow-mapSize={[1024, 1024]}
+          shadow-bias={-0.0006}
+          shadow-normalBias={0.02}
+          shadow-camera-near={1}
+          shadow-camera-far={38}
+          shadow-camera-left={-11}
+          shadow-camera-right={11}
+          shadow-camera-top={11}
+          shadow-camera-bottom={-11}
         />
 
-        <directionalLight
-          position={[-5, 8, -5]}
-          intensity={0.4}
-          color="#a855f7"
-        />
+        {/* Rim from behind the window wall: separates characters from the background. */}
+        <directionalLight position={[-12, 6, -8]} intensity={0.7} color="#7aa2ff" />
 
-        <pointLight
-          position={[0, 5, 0]}
-          intensity={0.3}
-          color="#3b82f6"
-        />
+        {/* Practical: warm bounce off the desk cluster, no shadow. */}
+        <pointLight position={[0, 2.6, 1]} intensity={12} distance={11} decay={2} color="#ffd9a0" />
 
-        {/* Environment for subtle reflections */}
-        <Environment preset="city" />
-
-        {/* Office environment */}
         <Office />
 
-        {/* Agent avatars */}
         {agentList.map((agent) => (
-          <AgentAvatar
-            key={agent.agent_id}
-            agent={agent}
-          />
+          <AgentAvatar key={agent.agent_id} agent={agent} />
         ))}
 
-        {/* Camera controls */}
         <OrbitControls
-          enablePan={true}
-          enableZoom={true}
-          enableRotate={true}
-          minDistance={8}
-          maxDistance={25}
-          maxPolarAngle={Math.PI / 2.1}
-          target={[0, 0, 0]}
+          enablePan
+          enableZoom
+          enableRotate
+          minDistance={6}
+          maxDistance={30}
+          maxPolarAngle={Math.PI / 2.15}
+          target={[0, 0.9, -0.5]}
         />
+
+        <RendererDiagnostics />
       </Canvas>
     </div>
   );

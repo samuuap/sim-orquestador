@@ -84,6 +84,10 @@ class DeveloperAgent(BaseAgent):
                 "description": task.description
             })
 
+            # Real work starts here. Without this the agent never leaves THINKING,
+            # so the desk "working" animation in the 3D client never plays.
+            await self._change_state(AgentState.WORKING, {"task_id": task.task_id})
+
             # Generate structured development output
             dev_output = await self._analyze_development_task(task.description)
 

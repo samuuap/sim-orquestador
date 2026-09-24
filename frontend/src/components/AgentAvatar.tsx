@@ -1,33 +1,29 @@
 /**
- * Agent Avatar — a character plus everything that floats around it.
+ * Agent Avatar — the character plus the floating UI that belongs to it.
  *
- * Composition:
- *   root group   position, driven by the behaviour layer
- *   ├ SimCharacter   the body; owns its own facing rotation
- *   ├ plumbob        the diamond overhead; the primary state read
- *   ├ bubble         short utterances, billboarded
- *   ├ name plate     billboarded
- *   └ selection ring flat on the floor
- *
- * The plumbob, bubble and name plate deliberately sit outside the character's facing group so they
- * stay readable no matter which way it turns.
+ * Root group carries world position only. Facing lives inside SimCharacter, so the plumbob, the
+ * name plate and the speech bubble stay readable whichever way the character turns.
  */
 
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Text } from '@react-three/drei';
 import * as THREE from 'three';
 import type { Agent } from '@/types';
 import { useAppStore } from '@/store';
 import { useAgentLife } from '@/behavior/useAgentLife';
+import { ACCENT, WORLD, createPlumbobMaterial } from '@/assets/materials';
 import { SimCharacter } from './character/SimCharacter';
-import { PLUMBOB_COLORS, PROPORTIONS as P, appearanceFor } from './character/appearance';
+import { P, PLUMBOB_COLORS, appearanceFor } from './character/appearance';
+
+/** Bubble text metrics, tuned against the default drei font at this camera distance. */
+const BUBBLE_FONT = 0.1;
+const BUBBLE_MAX_TEXT = 1.7;
+const CHARS_PER_LINE = 34;
 
 interface AgentAvatarProps {
   agent: Agent;
 }
-
-const FALLBACK_PLUMBOB = '#22c55e';
 
 export function AgentAvatar({ agent }: AgentAvatarProps) {
   const selectAgent = useAppStore((state) => state.selectAgent);
@@ -35,21 +31,43 @@ export function AgentAvatar({ agent }: AgentAvatarProps) {
   const isSelected = selectedAgent === agent.agent_id;
 
   const appearance = appearanceFor(agent.role);
+  const accent = ACCENT[agent.role];
   const life = useAgentLife(agent);
+
+  // One material per agent rather than per mesh; the plumbob animates its colour so it cannot
+  // be shared across the three.
+  const plumbobMaterial = useMemo(() => createPlumbobMaterial(), []);
 
   const root = useRef<THREE.Group>(null);
   const plumbob = useRef<THREE.Mesh>(null);
-  const plumbobMaterial = useRef<THREE.MeshStandardMaterial>(null);
   const bubble = useRef<THREE.Group>(null);
   const plate = useRef<THREE.Group>(null);
   const ring = useRef<THREE.Mesh>(null);
 
-  const targetColor = useRef(new THREE.Color(FALLBACK_PLUMBOB));
-
-  // The bubble text lives in React state because it must re-render <Text>. useFrame writes it only
-  // when it actually changes, which is a handful of times a minute - not once a frame.
+  const brain = useRef<THREE.Group>(null);
+  const [hovered, setHovered] = useState(false);
+  const targetColor = useRef(new THREE.Color(PLUMBOB_COLORS.IDLE));
   const [bubbleText, setBubbleText] = useState('');
   const lastBubble = useRef<string | null>(null);
+
+  const plumbobHeight = P.plumbobY * appearance.heightScale;
+
+  // Bubble geometry derives from the line itself: short answers get a small box, long ones wrap.
+  const bubbleLines = Math.max(1, Math.ceil(bubbleText.length / CHARS_PER_LINE));
+  const bubbleHeight = 0.16 + bubbleLines * BUBBLE_FONT * 1.3;
+  const bubbleWidth =
+    bubbleLines > 1
+      ? BUBBLE_MAX_TEXT + 0.2
+      : Math.min(BUBBLE_MAX_TEXT + 0.2, 0.22 + bubbleText.length * BUBBLE_FONT * 0.56);
+
+  // Cursor feedback. Reset on unmount too, or a hot reload mid-hover leaves the page stuck
+  // showing a pointer.
+  useEffect(() => {
+    document.body.style.cursor = hovered ? 'pointer' : '';
+    return () => {
+      document.body.style.cursor = '';
+    };
+  }, [hovered]);
 
   useFrame((state, rawDelta) => {
     const l = life.current;
@@ -58,35 +76,52 @@ export function AgentAvatar({ agent }: AgentAvatarProps) {
 
     if (root.current) root.current.position.copy(l.position);
 
-    // Plumbob: spins continuously, bobs gently, and eases toward the state colour.
     if (plumbob.current) {
-      plumbob.current.rotation.y = now * 1.5;
-      plumbob.current.position.y = P.plumbobY * appearance.heightScale + Math.sin(now * 2) * 0.045;
+      plumbob.current.rotation.y = now * 1.4;
+      plumbob.current.position.y =
+        plumbobHeight - 0.44 * l.sitBlend * appearance.heightScale + Math.sin(now * 2) * 0.04;
       const excited = agent.state === 'COMPLETED' || agent.state === 'ERROR';
-      const scale = excited ? 1.22 + Math.sin(now * 9) * 0.1 : 1;
-      plumbob.current.scale.setScalar(scale);
-    }
-    if (plumbobMaterial.current) {
-      const hex = PLUMBOB_COLORS[agent.state as keyof typeof PLUMBOB_COLORS] ?? FALLBACK_PLUMBOB;
-      targetColor.current.set(hex);
-      plumbobMaterial.current.color.lerp(targetColor.current, Math.min(1, delta * 6));
-      plumbobMaterial.current.emissive.copy(plumbobMaterial.current.color);
+      plumbob.current.scale.setScalar(excited ? 1.2 + Math.sin(now * 9) * 0.09 : 1);
     }
 
-    // Hand-rolled billboarding: cheaper than a helper and has no extra dependency.
-    if (plate.current) plate.current.quaternion.copy(state.camera.quaternion);
+    const hex = PLUMBOB_COLORS[agent.state as keyof typeof PLUMBOB_COLORS] ?? PLUMBOB_COLORS.IDLE;
+    targetColor.current.set(hex);
+    plumbobMaterial.color.lerp(targetColor.current, Math.min(1, delta * 6));
+    plumbobMaterial.emissive.copy(plumbobMaterial.color);
+
+    // Hand-rolled billboarding: no extra dependency, and cheaper than a helper component.
+    if (plate.current) {
+      plate.current.quaternion.copy(state.camera.quaternion);
+      // Sitting lowers the whole character; a name plate left at standing height floats.
+      plate.current.position.y = (2.34 - 0.44 * l.sitBlend) * appearance.heightScale;
+    }
     if (bubble.current) {
       bubble.current.quaternion.copy(state.camera.quaternion);
-      const wanted = l.bubble !== null;
-      const target = wanted ? 1 : 0;
-      const next = THREE.MathUtils.lerp(bubble.current.scale.x, target, Math.min(1, delta * 14));
+      const next = THREE.MathUtils.lerp(bubble.current.scale.x, l.bubble ? 1 : 0, Math.min(1, delta * 14));
       bubble.current.scale.setScalar(next);
       bubble.current.visible = next > 0.02;
+      // Follows the character down into the chair, and sits beside the head rather than over it.
+      // Billboarded, so local X is screen-right whichever way the camera is pointing.
+      const seatedDrop = 0.44 * l.sitBlend;
+      bubble.current.position.set(
+        0.42,
+        (1.62 - seatedDrop) * appearance.heightScale + bubbleHeight / 2,
+        0,
+      );
     }
 
     if (ring.current) {
-      const material = ring.current.material as THREE.MeshBasicMaterial;
-      material.opacity = 0.35 + Math.sin(now * 3) * 0.18;
+      (ring.current.material as THREE.MeshBasicMaterial).opacity = 0.32 + Math.sin(now * 3) * 0.16;
+    }
+
+    // Brain badge: scales in on hover or selection, so the click affordance is discoverable.
+    if (brain.current) {
+      const want = hovered || isSelected ? 1 : 0;
+      const next = THREE.MathUtils.lerp(brain.current.scale.x, want, Math.min(1, delta * 12));
+      brain.current.scale.setScalar(next);
+      brain.current.visible = next > 0.02;
+      brain.current.position.y = 1.94 * appearance.heightScale + Math.sin(now * 2.4) * 0.03;
+      brain.current.rotation.y = Math.sin(now * 0.9) * 0.4;
     }
 
     if (l.bubble !== lastBubble.current) {
@@ -97,55 +132,79 @@ export function AgentAvatar({ agent }: AgentAvatarProps) {
 
   return (
     <group ref={root}>
-      <group onClick={() => selectAgent(agent.agent_id)}>
-        <SimCharacter appearance={appearance} life={life} />
+      <group
+        onClick={(event) => {
+          event.stopPropagation();
+          selectAgent(agent.agent_id);
+        }}
+        onPointerOver={(event) => {
+          event.stopPropagation();
+          setHovered(true);
+        }}
+        onPointerOut={() => setHovered(false)}
+      >
+        <SimCharacter role={agent.role} appearance={appearance} life={life} />
       </group>
 
-      {/* Plumbob — the Sims tell. Doubles as the agent-state indicator. */}
-      <mesh ref={plumbob} position={[0, P.plumbobY * appearance.heightScale, 0]} scale={1}>
-        <octahedronGeometry args={[0.1, 0]} />
-        <meshStandardMaterial
-          ref={plumbobMaterial}
-          color={FALLBACK_PLUMBOB}
-          emissive={FALLBACK_PLUMBOB}
-          emissiveIntensity={0.9}
-          roughness={0.25}
-          metalness={0.1}
-          transparent
-          opacity={0.92}
-        />
+      {/* Brain badge: two hemispheres and a stem. Enough silhouette to read at this scale. */}
+      <group ref={brain} position={[-0.3, 1.94 * appearance.heightScale, 0]} scale={0} visible={false}>
+        {[-1, 1].map((side) => (
+          <mesh key={side} material={WORLD.brain} position={[0.042 * side, 0, 0]} scale={[0.92, 1, 1.12]}>
+            <sphereGeometry args={[0.058, 12, 10]} />
+          </mesh>
+        ))}
+        <mesh material={WORLD.brain} position={[0, -0.055, 0]} scale={[1, 1.3, 1]}>
+          <sphereGeometry args={[0.022, 8, 6]} />
+        </mesh>
+      </group>
+
+      <mesh ref={plumbob} material={plumbobMaterial} position={[0, plumbobHeight, 0]}>
+        <octahedronGeometry args={[0.085, 0]} />
       </mesh>
 
-      {/* Speech bubble. Scales in and out; hidden at zero scale. */}
-      <group ref={bubble} position={[0.34, 1.78 * appearance.heightScale, 0]} scale={0} visible={false}>
-        <mesh>
-          <circleGeometry args={[0.17, 24]} />
-          <meshBasicMaterial color="#f8fafc" transparent opacity={0.94} />
+      {/* Speech bubble. Sized from the line so a one-word answer is not a billboard, and offset
+          to the side so it never sits on top of the name plate. */}
+      <group ref={bubble} scale={0} visible={false}>
+        <mesh position={[bubbleWidth / 2, 0, 0]}>
+          <planeGeometry args={[bubbleWidth, bubbleHeight]} />
+          <meshBasicMaterial color="#f8fafc" transparent opacity={0.96} />
         </mesh>
-        <Text position={[0, 0, 0.01]} fontSize={0.13} color="#0f172a" anchorX="center" anchorY="middle">
+        {/* accent spine, so you can tell who is speaking at a glance */}
+        <mesh position={[0.012, 0, 0.001]}>
+          <planeGeometry args={[0.024, bubbleHeight]} />
+          <meshBasicMaterial color={accent} transparent opacity={0.9} />
+        </mesh>
+        <Text
+          position={[0.1, 0, 0.01]}
+          fontSize={BUBBLE_FONT}
+          maxWidth={BUBBLE_MAX_TEXT}
+          lineHeight={1.3}
+          color="#0f172a"
+          anchorX="left"
+          anchorY="middle"
+        >
           {bubbleText}
         </Text>
       </group>
 
-      {/* Name plate */}
-      <group ref={plate} position={[0, 2.26 * appearance.heightScale, 0]}>
+      <group ref={plate} position={[0, 2.34 * appearance.heightScale, 0]}>
         <Text
-          fontSize={0.17}
+          fontSize={0.155}
           color="#f8fafc"
           anchorX="center"
           anchorY="middle"
-          outlineWidth={0.018}
+          outlineWidth={0.016}
           outlineColor="#020617"
         >
           {appearance.name}
         </Text>
         <Text
-          position={[0, -0.18, 0]}
-          fontSize={0.1}
-          color={appearance.accent}
+          position={[0, -0.165, 0]}
+          fontSize={0.092}
+          color={accent}
           anchorX="center"
           anchorY="middle"
-          outlineWidth={0.012}
+          outlineWidth={0.011}
           outlineColor="#020617"
         >
           {agent.role.toUpperCase()}
@@ -154,8 +213,8 @@ export function AgentAvatar({ agent }: AgentAvatarProps) {
 
       {isSelected && (
         <mesh ref={ring} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.015, 0]}>
-          <ringGeometry args={[0.36, 0.46, 32]} />
-          <meshBasicMaterial color={appearance.accent} transparent opacity={0.5} />
+          <ringGeometry args={[0.34, 0.44, 28]} />
+          <meshBasicMaterial color={accent} transparent opacity={0.45} />
         </mesh>
       )}
     </group>
